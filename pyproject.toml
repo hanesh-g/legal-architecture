@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "legal-outcome-architecture"
+version = "0.1.0"
+description = "Dual token and cue-guided graph evidence for legal outcome research"
+requires-python = ">=3.10"
+dependencies = ["torch>=2.6,<3", "transformers>=4.46,<5", "sentence-transformers>=3.3,<6", "numpy>=1.26,<3"]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10"]
+
+[project.scripts]
+legal-outcome = "legal_outcome.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["legal_outcome*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
