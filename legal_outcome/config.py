@@ -1,4 +1,5 @@
 from dataclasses import dataclass, asdict
+import math
 
 
 @dataclass(frozen=True)
@@ -9,6 +10,9 @@ class ModelConfig:
     max_tokens: int = 384
     max_spans: int = 8
     dropout: float = 0.1
+    task_type: str = "single_label"
+    threshold: float = 0.5
+    positive_weights: tuple[float, ...] | None = None
     graph_layers: int = 2
     order_decay: float = 1.0
     cue_scale: float = 1.0
@@ -18,6 +22,15 @@ class ModelConfig:
 
     def __post_init__(self):
         object.__setattr__(self, "labels", tuple(self.labels))
+        if self.task_type not in ("single_label", "multi_label"):
+            raise ValueError("Unknown task type")
+        if not 0 < self.threshold < 1:
+            raise ValueError("Threshold must be between zero and one")
+        if self.positive_weights is not None:
+            weights = tuple(self.positive_weights)
+            if self.task_type != "multi_label" or len(weights) != len(self.labels) or any(not math.isfinite(w) or w <= 0 for w in weights):
+                raise ValueError("Positive weights require one positive finite value per multi-label class")
+            object.__setattr__(self, "positive_weights", weights)
         if len(self.labels) < 2 or len(set(self.labels)) != len(self.labels):
             raise ValueError("Use at least two distinct labels")
         if any(not isinstance(x, str) or not x.strip() for x in self.labels):

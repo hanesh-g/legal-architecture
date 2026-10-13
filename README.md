@@ -43,7 +43,7 @@ The command downloads the two public model checkpoints on first use. Permit `hug
 
 Use separate cases in the training, validation, and test sets. Split linked cases together. Use the same time limit for all input documents. Remove the final order and other text that reveals the target judgment when the task predicts a future outcome. Otherwise, the score can measure target leakage.
 
-The command trains all LegalBERT layers by default. Use `--freeze-lower-layers 4` for the alternative shown on page 2 of the source. The last epoch is saved. The command does not select the best validation epoch. It rejects an existing output directory.
+The command trains all LegalBERT layers by default. Use `--freeze-lower-layers 4` for the alternative shown on page 2 of the source. With validation data, the best validation macro-F1 epoch is saved after all requested epochs. Use `--selection-metric micro_f1`, `loss`, or `last` to change this rule. Without validation, the last epoch is saved. The command does not select the best validation epoch. It rejects an existing output directory.
 
 ## Evaluate and predict
 
@@ -52,7 +52,7 @@ legal-outcome evaluate --checkpoint checkpoints/run-1 --data data/test.jsonl
 legal-outcome predict --checkpoint checkpoints/run-1 --text-file data/case.txt --evidence
 ```
 
-Evaluation reports loss, accuracy, macro F1, and a confusion matrix. Matrix rows are actual classes. Matrix columns are predicted classes. Class order is stored in the checkpoint.
+Single-label evaluation reports loss, accuracy, micro and macro precision, recall, F1, per-class metrics, and a confusion matrix. Matrix rows are actual classes. Matrix columns are predicted classes. Class order is stored in the checkpoint.
 
 Prediction reports one class and its class probabilities. The optional evidence output reports span attention for that class. Attention weights show model behavior. They do not prove that a span caused a judgment. Softmax values are not calibrated confidence estimates.
 
@@ -61,3 +61,7 @@ Prediction reports one class and its class probabilities. The optional evidence 
 Read [Feature explanations](docs/features.md) for what, why, and how for each feature. Read [Architecture decisions](docs/architecture.md) for the equations, unspecified details, and source conflicts. Read [Validation](docs/validation.md) for the checks and their limits.
 
 The explanations use short sentences, active verbs, and consistent terms. They follow the requested style close to ASD-STE100. Formal ASD-STE100 compliance has not been certified.
+
+## Reduce overfitting and use ECHR article labels
+
+Read [the eight-epoch experiment guide](docs/overfitting.md). It explains the supplied TRACE results, multi-label data format, best-checkpoint selection, and regularization settings. Use `--task-type multi_label` for article label lists. This is an explicit extension of the PDF single-class prediction head. It does not reproduce TRACE precedent retrieval.

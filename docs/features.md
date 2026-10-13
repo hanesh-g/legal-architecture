@@ -145,3 +145,43 @@ These explanations use a simplified technical English style. Each feature has th
 **Why:** Model changes can break masking, graph flow, or checkpoint loading.
 
 **How:** Small local encoders exercise forward computation, gradients, optimizer updates, padding, and checkpoint recovery. These checks do not require public model downloads. A separate integration check uses the named public encoders when access is available.
+
+## 19. Optional multi-label prediction
+
+**What:** A case can receive several article labels, or no article labels.
+
+**Why:** The supplied TRACE report measures several possible violations per case. A single-class softmax cannot represent that task.
+
+**How:** Multi-label mode uses one sigmoid per article and binary cross-entropy. A threshold converts each probability to a decision. The checkpoint stores the task and threshold. The original single-label mode remains available.
+
+## 20. Validation-based checkpoint selection
+
+**What:** Training saves the best validation epoch after completing the requested epoch count.
+
+**Why:** The last epoch can fit the training set more closely and perform worse on new cases.
+
+**How:** The selector compares the chosen validation metric after each epoch. It retains the best weights and restores them before saving. It records the selected epoch. It never uses test results for selection.
+
+## 21. Regularization controls
+
+**What:** Training exposes dropout, weight decay, frozen layers, and separate learning rates.
+
+**Why:** These controls can reduce excessive fitting and preserve useful pretrained features.
+
+**How:** Dropout omits activations during training. AdamW applies weight decay to matrix weights. Frozen layers receive no updates. Encoder and prediction layers can use different rates. Validation checks whether each setting helps.
+
+## 22. Optional class weighting
+
+**What:** Multi-label training can increase the loss contribution of rare positive labels.
+
+**Why:** Frequent negative labels can dominate the learning signal.
+
+**How:** Training counts positive and negative labels in the training split. It calculates a ratio for each class and caps the weight. The checkpoint stores the weights. Classes with no training positives cause an explicit error. Weighted loss can increase false positives, so weighting is optional.
+
+## 23. Detailed metrics and split checks
+
+**What:** Evaluation reports precision and recall as well as F1. Multi-label evaluation also reports exact-match accuracy and Hamming loss.
+
+**Why:** One summary score can hide missed rare labels or excessive false positives.
+
+**How:** The evaluator counts true positives, false positives, and false negatives per class. It reports both micro and macro averages. Training checks normalized text and supplied case IDs for overlap with validation. Related cases without shared IDs still need a separate data audit.

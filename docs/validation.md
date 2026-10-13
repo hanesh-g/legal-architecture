@@ -4,8 +4,8 @@ Validation used Python 3.12 and the CPU package versions in `requirements-lock.t
 
 ## Passed
 
-- 27 automated tests completed.
-- The complete command workflow trained for two epochs on synthetic records. It saved a checkpoint, loaded it, evaluated two records, and predicted one document. The workflow used local small BERT and SentenceTransformer models.
+- 39 automated tests completed after the multi-label and regularization update.
+- The single-label and multi-label command workflows each trained for two epochs on synthetic records. It saved a checkpoint, loaded it, evaluated two records, and predicted one document. The workflow used local small BERT and SentenceTransformer models.
 - Checkpoint recovery preserved predictions, class order, tokenizer settings, and cue patterns.
 - Both token attention branches received gradients. Span attention, graph mixing, fusion, and the encoder received gradients.
 - MiniLM features received no gradients. Changes to those features changed graph edges but did not change token attention.
@@ -13,6 +13,10 @@ Validation used Python 3.12 and the CPU package versions in `requirements-lock.t
 - A separate smoke command completed a BERT forward pass, backpropagation, and an optimizer step.
 - `pip check` found no broken dependency requirements.
 - Repeating the locked installation preserved the installed package versions.
+
+- Validation checkpoint selection restored an earlier best epoch, while last-epoch selection retained the final epoch.
+- Known multi-label examples verified micro and macro precision, recall, F1, exact-match accuracy, and Hamming loss.
+- Class-weight caps, optimizer groups, multi-label target checks, and normalized split-overlap checks passed.
 
 ## Blocked
 

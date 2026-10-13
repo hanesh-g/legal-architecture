@@ -98,6 +98,9 @@ class LegalOutcomeModel(nn.Module):
             from transformers import AutoModel
             encoder = AutoModel.from_pretrained(config.legalbert_model)
         self.encoder = encoder
+        for module in encoder.modules():
+            if isinstance(module, nn.Dropout):
+                module.p = config.dropout
         hidden = encoder.config.hidden_size
         labels = len(config.labels)
         if config.freeze_lower_layers:
@@ -153,9 +156,17 @@ class LegalOutcomeModel(nn.Module):
         gate = torch.sigmoid(self.fusion_gate(torch.cat([token, span, expanded], -1)))
         fused = self.dropout(torch.cat([token, gate * span, expanded], -1))
         logits = torch.einsum("bld,ld->bl", fused, self.head_weight) + self.head_bias
-        output = {"logits": logits, "probabilities": logits.softmax(-1), "predictions": logits.argmax(-1),
+        probabilities = logits.sigmoid() if self.config.task_type == "multi_label" else logits.softmax(-1)
+        predictions = probabilities >= self.config.threshold if self.config.task_type == "multi_label" else logits.argmax(-1)
+        output = {"logits": logits, "probabilities": probabilities, "predictions": predictions,
                   "token_attention": token_weights, "span_attention": span_weights,
                   "span_gate": gate, "adjacency": adjacency}
         if labels is not None:
-            output["loss"] = F.cross_entropy(logits, labels)
+            if self.config.task_type == "multi_label":
+                if labels.shape != logits.shape or not ((labels == 0) | (labels == 1)).all():
+                    raise ValueError("Multi-label targets must be binary [batch, labels] vectors")
+                weights = None if self.config.positive_weights is None else logits.new_tensor(self.config.positive_weights)
+                output["loss"] = F.binary_cross_entropy_with_logits(logits, labels.float(), pos_weight=weights)
+            else:
+                output["loss"] = F.cross_entropy(logits, labels)
         return output

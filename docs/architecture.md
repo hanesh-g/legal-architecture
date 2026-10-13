@@ -44,8 +44,8 @@ Fusion follows page 2: `z = [token; span; CLS]`, `g = sigmoid(Wg z + bg)`, and `
 - **Graph propagation:** Use two residual graph layers, GELU, and layer normalization. The source does not state layer count or activation.
 - **Token attention mask:** Include visible CLS and SEP tokens. Exclude padding. Span pooling excludes all special tokens.
 - **Span IDs:** Use zero-based indices and `-1` for noncontent tokens. The diagram uses a different illustrative numbering scheme.
-- **Training:** Use cross-entropy for one mutually exclusive target class per document. Multi-label prediction is outside the source's softmax task.
-- **Model selection:** Save the final epoch. No early stopping or hyperparameter search is implied.
+- **Training:** Use cross-entropy for one mutually exclusive target class per document. The optional multi-label extension uses independent sigmoid heads and binary cross-entropy. This changes the source's final softmax task; the token and span evidence paths remain the same.
+- **Model selection:** With validation data, save the best validation macro-F1 epoch by default. Without validation, save the final epoch. Training still completes the requested epochs. The selector can use another specified validation metric. No early stopping or hyperparameter search is implied.
 
 ## Conflicting source details
 

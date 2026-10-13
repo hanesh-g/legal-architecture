@@ -79,4 +79,6 @@ def collate_documents(items, semantic_encoder):
         offset += count
     if all("label" in x for x in items):
         batch["labels"] = torch.tensor([x["label"] for x in items])
+        if batch["labels"].ndim == 2:
+            batch["labels"] = batch["labels"].float()
     return batch

@@ -1,11 +1,14 @@
 """Train, evaluate, predict, or run a download-free architecture smoke check."""
 import argparse
+import math
+from dataclasses import replace
 import json
 import random
 from pathlib import Path
 import numpy as np
 import torch
 from .config import ModelConfig
+from .training import CheckpointSelector, make_optimizer, positive_weights, check_split_overlap
 from .data import DocumentProcessor, collate_documents
 from .model import LegalOutcomeModel
 from .runtime import read_records, prepare_records, batches, evaluate, save_checkpoint, load_checkpoint
@@ -22,22 +25,40 @@ def train(args):
     from sentence_transformers import SentenceTransformer
     set_seed(args.seed)
     config = ModelConfig(tuple(args.labels), max_tokens=args.max_tokens, max_spans=args.max_spans,
+                         task_type=args.task_type, threshold=args.threshold, dropout=args.dropout,
                          freeze_lower_layers=args.freeze_lower_layers,
                          legalbert_model=args.legalbert_model, minilm_model=args.minilm_model)
     if Path(args.output).exists():
         raise ValueError("Output already exists. Use a new checkpoint directory")
     if args.epochs < 1 or args.learning_rate <= 0 or args.batch_size < 1:
         raise ValueError("Require positive epochs, learning rate, and batch size")
-    rows = read_records(args.data, config.labels)
-    validation_rows = read_records(args.validation, config.labels) if args.validation else None
-    if validation_rows and {r['text'] for r in rows} & {r['text'] for r in validation_rows}:
-        raise ValueError("Training and validation documents overlap")
+    head_lr = args.head_learning_rate if args.head_learning_rate is not None else args.learning_rate
+    if not all(math.isfinite(v) for v in (args.learning_rate, head_lr, args.weight_decay)) or head_lr <= 0 or args.weight_decay < 0:
+        raise ValueError("Invalid learning rate or weight decay")
+    if args.positive_weight_cap is not None and (config.task_type != "multi_label" or not math.isfinite(args.positive_weight_cap) or args.positive_weight_cap < 1):
+        raise ValueError("Positive weight cap requires multi-label mode and a finite value of at least one")
+    rows = read_records(args.data, config.labels, config.task_type)
+    validation_rows = read_records(args.validation, config.labels, config.task_type) if args.validation else None
+    selection = args.selection_metric
+    if selection == "auto":
+        selection = "macro_f1" if validation_rows else "last"
+    if selection != "last" and validation_rows is None:
+        raise ValueError("Validation data is required for best-checkpoint selection")
+    if ((selection == "accuracy" and config.task_type == "multi_label") or
+            (selection == "exact_match_accuracy" and config.task_type == "single_label")):
+        raise ValueError("Selection metric is incompatible with task type")
+    if validation_rows:
+        check_split_overlap(rows, validation_rows)
     processor = DocumentProcessor(AutoTokenizer.from_pretrained(config.legalbert_model), config)
     items = prepare_records(rows, processor)
     validation_items = prepare_records(validation_rows, processor) if validation_rows else None
     semantic_encoder = SentenceTransformer(config.minilm_model, device="cpu")
+    if args.positive_weight_cap is not None:
+        config = replace(config, positive_weights=positive_weights(items, args.positive_weight_cap))
+        processor.config = config
     model = LegalOutcomeModel(config).to(args.device)
-    optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=args.learning_rate)
+    optimizer = make_optimizer(model, args.learning_rate, head_lr, args.weight_decay)
+    selector = CheckpointSelector(selection)
     history = []
     for epoch in range(args.epochs):
         model.train()
@@ -54,9 +75,16 @@ def train(args):
         report = {"epoch": epoch + 1, "training_loss": total / len(items)}
         if validation_items:
             report["validation"] = evaluate(model, validation_items, semantic_encoder, args.batch_size, args.device)
+        if args.report_training_metrics:
+            report["training"] = evaluate(model, items, semantic_encoder, args.batch_size, args.device)
+        report["selected"] = selector.update(model, epoch + 1, report.get("validation"))
         history.append(report)
         print(json.dumps(report), flush=True)
+    selector.restore(model)
     save_checkpoint(args.output, model, processor, {"seed": args.seed, "history": history,
+                    "selected_epoch": selector.best_epoch, "selection_metric": selection,
+                    "selection_score": selector.best_score, "head_learning_rate": head_lr,
+                    "weight_decay": args.weight_decay,
                     "epochs": args.epochs, "learning_rate": args.learning_rate,
                     "training_examples": len(items), "batch_size": args.batch_size})
 
@@ -67,19 +95,24 @@ def predict(args):
     batch = {k: v.to(args.device) for k, v in collate_documents([item], semantic).items()}
     with torch.no_grad():
         result = model(**batch)
-    label = result["predictions"].item()
-    report = {"predicted_label": model.config.labels[label],
-              "probabilities": dict(zip(model.config.labels, result["probabilities"][0].tolist()))}
+    report = {"probabilities": dict(zip(model.config.labels, result["probabilities"][0].tolist()))}
+    if model.config.task_type == "multi_label":
+        selected = torch.where(result["predictions"][0])[0].tolist()
+        report.update(predicted_labels=[model.config.labels[i] for i in selected], threshold=model.config.threshold)
+    else:
+        selected = [result["predictions"].item()]
+        report["predicted_label"] = model.config.labels[selected[0]]
     if args.evidence:
         # Attention gives model weights; it does not establish legal causation.
-        report["span_evidence"] = [{"text": span, "attention": result["span_attention"][0, label, i].item()}
-                                   for i, span in enumerate(item["spans"])]
+        evidence = {model.config.labels[label]: [{"text": span, "attention": result["span_attention"][0, label, i].item()}
+                    for i, span in enumerate(item["spans"])] for label in selected}
+        report["span_evidence"] = evidence if model.config.task_type == "multi_label" else evidence[model.config.labels[selected[0]]]
     print(json.dumps(report, indent=2))
 
 
 def score(args):
     model, processor, semantic = load_checkpoint(args.checkpoint, args.device)
-    items = prepare_records(read_records(args.data, model.config.labels), processor)
+    items = prepare_records(read_records(args.data, model.config.labels, model.config.task_type), processor)
     print(json.dumps(evaluate(model, items, semantic, args.batch_size, args.device), indent=2))
 
 
@@ -114,6 +147,14 @@ def main():
     p.add_argument("--epochs", type=int, default=3)
     p.add_argument("--batch-size", type=int, default=2)
     p.add_argument("--learning-rate", type=float, default=2e-5)
+    p.add_argument("--head-learning-rate", type=float)
+    p.add_argument("--weight-decay", type=float, default=0.01)
+    p.add_argument("--dropout", type=float, default=0.1)
+    p.add_argument("--task-type", choices=["single_label", "multi_label"], default="single_label")
+    p.add_argument("--threshold", type=float, default=0.5)
+    p.add_argument("--positive-weight-cap", type=float)
+    p.add_argument("--selection-metric", choices=["auto", "last", "loss", "micro_f1", "macro_f1", "accuracy", "exact_match_accuracy"], default="auto")
+    p.add_argument("--report-training-metrics", action="store_true")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--legalbert-model", default="nlpaueb/legal-bert-base-uncased")
     p.add_argument("--minilm-model", default="sentence-transformers/all-MiniLM-L6-v2")
