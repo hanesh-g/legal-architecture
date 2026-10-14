@@ -1,6 +1,7 @@
 """Actual command workflow with local Transformer and SentenceTransformer models."""
 import json
 import pytest
+import torch
 import os
 import subprocess
 import sys
@@ -67,6 +68,29 @@ def test_train_evaluate_predict_commands(tmp_path, multi):
         assert abs(sum(result['probabilities'].values()) - 1) < 1e-6
         assert len(result['span_evidence']) == 3
         assert abs(sum(s['attention'] for s in result['span_evidence']) - 1) < 1e-6
+    # Resume from a completed epoch reproduces an uninterrupted run, including
+    # dropout randomness, optimizer state, best selection, and label mode.
+    restart = tmp_path / 'restarted'
+    common = ['train', '--data', str(train_file), '--validation', str(validation), '--labels', 'allow', 'deny',
+              '--output', str(restart), '--legalbert-model', str(encoder_path), '--minilm-model', str(semantic_path),
+              '--max-tokens', '16', '--report-training-metrics', '--dropout', '0.3', '--head-learning-rate', '0.0001']
+    if multi:
+        common += ['--task-type', 'multi_label', '--positive-weight-cap', '3']
+    run(*common, '--epochs', '1')
+    assert len(json.loads((restart / 'history.json').read_text())) == 1
+    resume_output = run(*common, '--epochs', '2', '--resume', str(restart / 'training-state.pt'))
+    assert [json.loads(line)['epoch'] for line in resume_output.splitlines()] == [2]
+    original_state = torch.load(checkpoint / 'training-state.pt', weights_only=True)
+    resumed_state = torch.load(restart / 'training-state.pt', weights_only=True)
+    assert original_state['history'] == resumed_state['history']
+    for name, parameter in original_state['model'].items():
+        assert torch.equal(parameter, resumed_state['model'][name]), name
+    assert len(json.loads((restart / 'history.json').read_text())) == 2
+    rejected_resume = subprocess.run([sys.executable, '-m', 'legal_outcome.cli', *common,
+                                      '--epochs', '3', '--resume', str(restart / 'training-state.pt'),
+                                      '--seed', '99'], capture_output=True, text=True)
+    assert rejected_resume.returncode != 0
+    assert 'settings or dataset differ' in rejected_resume.stderr
     # Existing output must not be overwritten.
     rejected = subprocess.run([sys.executable, '-m', 'legal_outcome.cli', 'train', '--data', str(train_file),
                                '--labels', 'allow', 'deny', '--output', str(checkpoint)], capture_output=True, text=True)

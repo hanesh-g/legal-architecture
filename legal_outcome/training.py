@@ -55,3 +55,59 @@ def check_split_overlap(train, validation):
     validation_ids = {str(r["case_id"]) for r in validation if r.get("case_id") is not None}
     if train_text & validation_text or train_ids & validation_ids:
         raise ValueError("Training and validation cases overlap")
+
+
+def atomic_torch_save(payload, path):
+    """Keep the previous complete checkpoint until replacement succeeds."""
+    from pathlib import Path
+    import os
+    path = Path(path)
+    temporary = path.with_name(path.name + '.tmp')
+    try:
+        with temporary.open('wb') as stream:
+            torch.save(payload, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def capture_rng():
+    import random
+    import numpy as np
+    state = np.random.get_state()
+    return {'python': random.getstate(), 'numpy': [state[0], state[1].tolist(), *state[2:]],
+            'torch': torch.get_rng_state(),
+            'cuda': torch.cuda.get_rng_state_all() if torch.cuda.is_available() else []}
+
+
+def restore_rng(state):
+    import random
+    import numpy as np
+    random.setstate(state['python'])
+    value = state['numpy']
+    np.random.set_state((value[0], np.asarray(value[1], dtype=np.uint32), *value[2:]))
+    torch.set_rng_state(state['torch'].cpu())
+    if state['cuda']:
+        if not torch.cuda.is_available() or len(state['cuda']) != torch.cuda.device_count():
+            raise ValueError('Resume requires the original CUDA device count')
+        torch.cuda.set_rng_state_all([x.cpu() for x in state['cuda']])
+
+
+def save_training_state(path, model, optimizer, selector, history, contract):
+    atomic_torch_save({'format_version': 1, 'model': model.state_dict(), 'optimizer': optimizer.state_dict(),
+                      'best_model': selector.state, 'best_score': selector.best_score,
+                      'best_epoch': selector.best_epoch, 'history': history, 'completed_epoch': history[-1]['epoch'],
+                      'contract': contract, 'rng': capture_rng()}, path)
+
+
+def load_training_state(path, model, optimizer, selector, contract):
+    payload = torch.load(path, map_location='cpu', weights_only=True)
+    if payload.get('format_version') != 1 or payload['contract'] != contract:
+        raise ValueError('Resume settings or dataset differ from the saved run')
+    model.load_state_dict(payload['model'])
+    optimizer.load_state_dict(payload['optimizer'])
+    selector.state, selector.best_score, selector.best_epoch = payload['best_model'], payload['best_score'], payload['best_epoch']
+    restore_rng(payload['rng'])
+    return payload['completed_epoch'], payload['history']

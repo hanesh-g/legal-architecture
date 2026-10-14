@@ -4,7 +4,7 @@ Validation used Python 3.12 and the CPU package versions in `requirements-lock.t
 
 ## Passed
 
-- 39 automated tests completed after the multi-label and regularization update.
+- 40 automated tests completed after the recovery-checkpoint update.
 - The single-label and multi-label command workflows each trained for two epochs on synthetic records. It saved a checkpoint, loaded it, evaluated two records, and predicted one document. The workflow used local small BERT and SentenceTransformer models.
 - Checkpoint recovery preserved predictions, class order, tokenizer settings, and cue patterns.
 - Both token attention branches received gradients. Span attention, graph mixing, fusion, and the encoder received gradients.
@@ -17,6 +17,9 @@ Validation used Python 3.12 and the CPU package versions in `requirements-lock.t
 - Validation checkpoint selection restored an earlier best epoch, while last-epoch selection retained the final epoch.
 - Known multi-label examples verified micro and macro precision, recall, F1, exact-match accuracy, and Hamming loss.
 - Class-weight caps, optimizer groups, multi-label target checks, and normalized split-overlap checks passed.
+
+- Interrupted and resumed single-label and multi-label runs exactly matched uninterrupted CPU runs, including dropout, history, final training weights, and best-epoch selection.
+- A simulated checkpoint write failure preserved the previous complete file. Changed resume settings were rejected. GPU resume was not exercised in this CPU-only environment.
 
 ## Blocked
 

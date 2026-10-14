@@ -96,9 +96,9 @@ def evaluate(model, items, semantic_encoder, batch_size, device):
     return {**metrics(targets, predictions, model.config.labels, model.config.task_type), "loss": loss_sum / len(items)}
 
 
-def save_checkpoint(path, model, processor, report):
+def save_checkpoint(path, model, processor, report, *, allow_existing=False):
     path = Path(path)
-    path.mkdir(parents=True, exist_ok=False)
+    path.mkdir(parents=True, exist_ok=allow_existing)
     processor.tokenizer.save_pretrained(path / "tokenizer")
     metadata = {"format_version": 1, "model_config": model.config.to_dict(),
                 "encoder_config": model.encoder.config.to_dict(),

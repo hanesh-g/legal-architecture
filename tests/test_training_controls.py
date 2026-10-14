@@ -96,3 +96,17 @@ def test_config_rejects_invalid_weights_and_threshold():
         ModelConfig(('a', 'b'), task_type='multi_label', positive_weights=(1, float('nan')))
     with pytest.raises(ValueError):
         ModelConfig(('a', 'b'), threshold=1)
+
+
+def test_failed_checkpoint_write_preserves_previous_file(tmp_path, monkeypatch):
+    from legal_outcome.training import atomic_torch_save
+    path = tmp_path / 'training-state.pt'
+    atomic_torch_save({'epoch': 1}, path)
+    def fail(payload, stream):
+        stream.write(b'incomplete')
+        raise OSError('simulated disk write failure')
+    monkeypatch.setattr(torch, 'save', fail)
+    with pytest.raises(OSError, match='simulated'):
+        atomic_torch_save({'epoch': 2}, path)
+    assert torch.load(path, weights_only=True)['epoch'] == 1
+    assert not path.with_name(path.name + '.tmp').exists()

@@ -7,7 +7,7 @@ name = "legal-outcome-architecture"
 version = "0.1.0"
 description = "Dual token and cue-guided graph evidence for legal outcome research"
 requires-python = ">=3.10"
-dependencies = ["torch>=2.6,<3", "transformers>=4.46,<5", "sentence-transformers>=3.3,<6", "numpy>=1.26,<3"]
+dependencies = ["torch>=2.6,<3", "transformers>=4.46,<5", "sentence-transformers>=3.3,<6", "numpy>=1.26,<3", "tqdm>=4.66,<5"]
 
 [project.optional-dependencies]
 test = ["pytest>=8,<10"]

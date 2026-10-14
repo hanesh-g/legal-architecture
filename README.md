@@ -65,3 +65,19 @@ The explanations use short sentences, active verbs, and consistent terms. They f
 ## Reduce overfitting and use ECHR article labels
 
 Read [the eight-epoch experiment guide](docs/overfitting.md). It explains the supplied TRACE results, multi-label data format, best-checkpoint selection, and regularization settings. Use `--task-type multi_label` for article label lists. This is an explicit extension of the PDF single-class prediction head. It does not reproduce TRACE precedent retrieval.
+
+## Automatic checkpoints and resume
+
+Training now displays batch progress and saves `training-state.pt` and `history.json` inside `--output` after each completed epoch, including its evaluations. The recovery checkpoint contains the latest model, optimizer, random states, epoch history, and best-validation model. The previous complete checkpoint stays in place until its replacement has been written. Keep enough free disk space for both the existing and temporary checkpoint files; full LegalBERT recovery files can be several GB.
+
+To resume, repeat the original command with the same settings and output directory. Add:
+
+```sh
+--resume checkpoints/run-1/training-state.pt
+```
+
+`--epochs 8` still means eight epochs in total. A checkpoint saved after epoch 5 resumes at epoch 6. A stop during epoch 6 restarts that epoch from the saved epoch-5 state. Changed data, labels, optimizer settings, seed, device, or reporting settings are rejected. The total epoch target may increase. The checkpoint is a local training artifact; it does not contain raw case text. Keep access to the original datasets and encoder models.
+
+PowerShell and Jupyter both work. Closing PowerShell, stopping the notebook kernel, restarting the computer, or running out of runtime can stop training. The recovery file survives these events if it was saved to persistent local storage. Neither interface recovers the old run that stopped before this feature was added.
+
+On successful completion, the usual `model.pt`, `metadata.json`, and tokenizer are saved at the output root for evaluation and prediction. `training-state.pt` remains available for continuation and keeps the latest training weights, even when `model.pt` uses an earlier best epoch.

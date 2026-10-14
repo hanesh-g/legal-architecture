@@ -1,6 +1,9 @@
 """Train, evaluate, predict, or run a download-free architecture smoke check."""
 import argparse
 import math
+import hashlib
+import sys
+from tqdm.auto import tqdm
 from dataclasses import replace
 import json
 import random
@@ -8,7 +11,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from .config import ModelConfig
-from .training import CheckpointSelector, make_optimizer, positive_weights, check_split_overlap
+from .training import CheckpointSelector, make_optimizer, positive_weights, check_split_overlap, save_training_state, load_training_state
 from .data import DocumentProcessor, collate_documents
 from .model import LegalOutcomeModel
 from .runtime import read_records, prepare_records, batches, evaluate, save_checkpoint, load_checkpoint
@@ -28,7 +31,7 @@ def train(args):
                          task_type=args.task_type, threshold=args.threshold, dropout=args.dropout,
                          freeze_lower_layers=args.freeze_lower_layers,
                          legalbert_model=args.legalbert_model, minilm_model=args.minilm_model)
-    if Path(args.output).exists():
+    if Path(args.output).exists() and not args.resume:
         raise ValueError("Output already exists. Use a new checkpoint directory")
     if args.epochs < 1 or args.learning_rate <= 0 or args.batch_size < 1:
         raise ValueError("Require positive epochs, learning rate, and batch size")
@@ -49,9 +52,11 @@ def train(args):
         raise ValueError("Selection metric is incompatible with task type")
     if validation_rows:
         check_split_overlap(rows, validation_rows)
+    print("Preparing tokenizer and documents...", file=sys.stderr, flush=True)
     processor = DocumentProcessor(AutoTokenizer.from_pretrained(config.legalbert_model), config)
     items = prepare_records(rows, processor)
     validation_items = prepare_records(validation_rows, processor) if validation_rows else None
+    print("Loading MiniLM and LegalBERT...", file=sys.stderr, flush=True)
     semantic_encoder = SentenceTransformer(config.minilm_model, device="cpu")
     if args.positive_weight_cap is not None:
         config = replace(config, positive_weights=positive_weights(items, args.positive_weight_cap))
@@ -59,11 +64,29 @@ def train(args):
     model = LegalOutcomeModel(config).to(args.device)
     optimizer = make_optimizer(model, args.learning_rate, head_lr, args.weight_decay)
     selector = CheckpointSelector(selection)
-    history = []
-    for epoch in range(args.epochs):
+    contract = {"config": config.to_dict(), "selection": selection, "seed": args.seed,
+                "batch_size": args.batch_size, "encoder_lr": args.learning_rate, "head_lr": head_lr,
+                "weight_decay": args.weight_decay, "device": args.device,
+                "report_training_metrics": args.report_training_metrics,
+                "data_sha256": hashlib.sha256(Path(args.data).read_bytes()).hexdigest(),
+                "validation_sha256": hashlib.sha256(Path(args.validation).read_bytes()).hexdigest() if args.validation else None}
+    history, start_epoch = [], 0
+    output_dir = Path(args.output)
+    state_path = output_dir / "training-state.pt"
+    if args.resume:
+        if Path(args.resume).resolve() != state_path.resolve():
+            raise ValueError("Resume file must be training-state.pt inside the output directory")
+        start_epoch, history = load_training_state(args.resume, model, optimizer, selector, contract)
+        if args.epochs <= start_epoch:
+            raise ValueError("Total epochs must exceed completed checkpoint epochs")
+        print(f"Resuming after epoch {start_epoch}; next epoch is {start_epoch + 1}", file=sys.stderr, flush=True)
+    else:
+        output_dir.mkdir(parents=True, exist_ok=False)
+    for epoch in range(start_epoch, args.epochs):
         model.train()
         total = 0.0
-        for batch in batches(items, args.batch_size, semantic_encoder, args.device, shuffle=True):
+        iterator = batches(items, args.batch_size, semantic_encoder, args.device, shuffle=True)
+        for batch in tqdm(iterator, total=math.ceil(len(items) / args.batch_size), desc=f"Epoch {epoch + 1}/{args.epochs}"):
             optimizer.zero_grad(set_to_none=True)
             output = model(**batch)
             if not torch.isfinite(output["loss"]):
@@ -74,11 +97,16 @@ def train(args):
             total += output["loss"].item() * len(batch["labels"])
         report = {"epoch": epoch + 1, "training_loss": total / len(items)}
         if validation_items:
+            print("Evaluating validation set...", file=sys.stderr, flush=True)
             report["validation"] = evaluate(model, validation_items, semantic_encoder, args.batch_size, args.device)
         if args.report_training_metrics:
+            print("Evaluating training set...", file=sys.stderr, flush=True)
             report["training"] = evaluate(model, items, semantic_encoder, args.batch_size, args.device)
         report["selected"] = selector.update(model, epoch + 1, report.get("validation"))
         history.append(report)
+        save_training_state(state_path, model, optimizer, selector, history, contract)
+        (output_dir / "history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
+        print(f"Checkpoint saved after epoch {epoch + 1}: {state_path}", file=sys.stderr, flush=True)
         print(json.dumps(report), flush=True)
     selector.restore(model)
     save_checkpoint(args.output, model, processor, {"seed": args.seed, "history": history,
@@ -86,7 +114,7 @@ def train(args):
                     "selection_score": selector.best_score, "head_learning_rate": head_lr,
                     "weight_decay": args.weight_decay,
                     "epochs": args.epochs, "learning_rate": args.learning_rate,
-                    "training_examples": len(items), "batch_size": args.batch_size})
+                    "training_examples": len(items), "batch_size": args.batch_size}, allow_existing=True)
 
 
 def predict(args):
@@ -144,6 +172,7 @@ def main():
     p.add_argument("--validation")
     p.add_argument("--labels", nargs="+", required=True)
     p.add_argument("--output", required=True)
+    p.add_argument("--resume", help="Path to the output directory training-state.pt; epochs is the total target")
     p.add_argument("--epochs", type=int, default=3)
     p.add_argument("--batch-size", type=int, default=2)
     p.add_argument("--learning-rate", type=float, default=2e-5)

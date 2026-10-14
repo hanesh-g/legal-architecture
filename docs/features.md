@@ -185,3 +185,19 @@ These explanations use a simplified technical English style. Each feature has th
 **Why:** One summary score can hide missed rare labels or excessive false positives.
 
 **How:** The evaluator counts true positives, false positives, and false negatives per class. It reports both micro and macro averages. Training checks normalized text and supplied case IDs for overlap with validation. Related cases without shared IDs still need a separate data audit.
+
+## 24. Automatic recovery checkpoints
+
+**What:** Training saves a recovery file after each completed epoch.
+
+**Why:** A closed terminal or stopped notebook must not discard all completed epochs.
+
+**How:** The file stores model weights, optimizer state, random states, history, and the best model. A temporary file is written first. The complete file replaces the previous checkpoint only after writing succeeds. Resume checks the data and settings, restores the saved state, and starts the next epoch.
+
+## 25. Training progress display
+
+**What:** Training shows a batch progress bar and messages for preparation, evaluation, and checkpoint saves.
+
+**Why:** A blinking cursor does not show which operation is active.
+
+**How:** The progress bar counts completed training batches. The trainer reports evaluation stages separately. It prints the recovery file path after each successful save.
