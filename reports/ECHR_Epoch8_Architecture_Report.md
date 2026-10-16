@@ -204,4 +204,3 @@ Prioritize split verification, best-epoch selection, document coverage, and rare
 - No new model training, test evaluation, or causal improvement experiment was performed to create this report.
 
 The report uses short sentences, active verbs, and consistent terms. The requested style is approximated. ASD-STE100 conformity has not been measured or certified.
-
