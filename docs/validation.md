@@ -4,7 +4,7 @@ Validation used Python 3.12 and the CPU package versions in `requirements-lock.t
 
 ## Passed
 
-- 40 automated tests completed after the recovery-checkpoint update.
+- 50 automated tests completed after the paper-metric update.
 - The single-label and multi-label command workflows each trained for two epochs on synthetic records. It saved a checkpoint, loaded it, evaluated two records, and predicted one document. The workflow used local small BERT and SentenceTransformer models.
 - Checkpoint recovery preserved predictions, class order, tokenizer settings, and cue patterns.
 - Both token attention branches received gradients. Span attention, graph mixing, fusion, and the encoder received gradients.
@@ -20,6 +20,8 @@ Validation used Python 3.12 and the CPU package versions in `requirements-lock.t
 
 - Interrupted and resumed single-label and multi-label runs exactly matched uninterrupted CPU runs, including dropout, history, final training weights, and best-epoch selection.
 - A simulated checkpoint write failure preserved the previous complete file. Changed resume settings were rejected. GPU resume was not exercised in this CPU-only environment.
+
+- Micro PR-AUC, average precision, and ROC-AUC matched scikit-learn reference calculations, including tied scores. Undefined targets returned explicit nulls. Micro Jaccard matched its F1 relationship.
 
 ## Blocked
 

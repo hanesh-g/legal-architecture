@@ -81,3 +81,7 @@ To resume, repeat the original command with the same settings and output directo
 PowerShell and Jupyter both work. Closing PowerShell, stopping the notebook kernel, restarting the computer, or running out of runtime can stop training. The recovery file survives these events if it was saved to persistent local storage. Neither interface recovers the old run that stopped before this feature was added.
 
 On successful completion, the usual `model.pt`, `metadata.json`, and tokenizer are saved at the output root for evaluation and prediction. `training-state.pt` remains available for continuation and keeps the latest training weights, even when `model.pt` uses an earlier best epoch.
+
+## Faculty paper evaluation
+
+See [the Haneesh1/Haneesh3 completion plan](docs/faculty_completion_plan.md). Multi-label evaluation now includes micro Jaccard, trapezoidal PR-AUC, average precision, and ROC-AUC from continuous model probabilities. Existing saved prediction checkpoints do not need retraining for these additional metrics.

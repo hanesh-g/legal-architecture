@@ -141,7 +141,11 @@ def predict(args):
 def score(args):
     model, processor, semantic = load_checkpoint(args.checkpoint, args.device)
     items = prepare_records(read_records(args.data, model.config.labels, model.config.task_type), processor)
-    print(json.dumps(evaluate(model, items, semantic, args.batch_size, args.device), indent=2))
+    result = evaluate(model, items, semantic, args.batch_size, args.device)
+    metadata = json.loads((Path(args.checkpoint) / "metadata.json").read_text(encoding="utf-8"))
+    result["selected_epoch"] = metadata.get("training_report", {}).get("selected_epoch")
+    result["decision_threshold"] = model.config.threshold if model.config.task_type == "multi_label" else None
+    print(json.dumps(result, indent=2))
 
 
 def smoke(args):

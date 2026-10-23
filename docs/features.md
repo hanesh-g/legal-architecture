@@ -201,3 +201,11 @@ These explanations use a simplified technical English style. Each feature has th
 **Why:** A blinking cursor does not show which operation is active.
 
 **How:** The progress bar counts completed training batches. The trainer reports evaluation stages separately. It prints the recovery file path after each successful save.
+
+## 26. Paper evaluation measures
+
+**What:** Multi-label evaluation now reports micro Jaccard, micro PR-AUC, micro average precision, and micro ROC-AUC.
+
+**Why:** The PILOT paper requires measures beyond the original F1 report.
+
+**How:** Jaccard uses pooled binary decisions. The AUC calculations pool continuous article probabilities and group tied scores. The evaluator reports the PR-AUC definition and keeps average precision separate. Undefined AUC values are null with an explanation. The selected checkpoint can be evaluated again without training.

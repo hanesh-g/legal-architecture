@@ -6,6 +6,7 @@ from .config import ModelConfig
 from .data import DocumentProcessor, collate_documents
 from .model import LegalOutcomeModel
 from .cues import CueExtractor
+from .paper_metrics import ranking_metrics
 
 
 def read_records(path, labels, task_type="single_label"):
@@ -73,6 +74,7 @@ def metrics(targets, predictions, label_names, task_type="single_label"):
         tp = (actual & predicted).sum(0).float()
         fp = (~actual & predicted).sum(0).float()
         fn = (actual & ~predicted).sum(0).float()
+        result["micro_jaccard"] = _divide(tp.sum(), (tp + fp + fn).sum()).item()
         result.update(exact_match_accuracy=(actual == predicted).all(-1).float().mean().item(),
                       hamming_loss=(actual != predicted).float().mean().item())
         return {**result, **_class_metrics(tp, fp, fn, actual.sum(0), label_names)}
@@ -87,13 +89,18 @@ def metrics(targets, predictions, label_names, task_type="single_label"):
 @torch.no_grad()
 def evaluate(model, items, semantic_encoder, batch_size, device):
     model.eval()
-    targets, predictions, loss_sum = [], [], 0.0
+    targets, predictions, probabilities, loss_sum = [], [], [], 0.0
     for batch in batches(items, batch_size, semantic_encoder, device):
         output = model(**batch)
         targets.extend(batch["labels"].tolist())
         predictions.extend(output["predictions"].tolist())
+        if model.config.task_type == "multi_label":
+            probabilities.extend(output["probabilities"].detach().cpu().float().tolist())
         loss_sum += output["loss"].item() * len(batch["labels"])
-    return {**metrics(targets, predictions, model.config.labels, model.config.task_type), "loss": loss_sum / len(items)}
+    result = {**metrics(targets, predictions, model.config.labels, model.config.task_type), "loss": loss_sum / len(items)}
+    if model.config.task_type == "multi_label":
+        result.update(ranking_metrics(targets, probabilities))
+    return result
 
 
 def save_checkpoint(path, model, processor, report, *, allow_existing=False):
