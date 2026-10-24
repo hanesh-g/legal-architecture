@@ -210,7 +210,8 @@ def score(args):
                                       f"{model.config.max_content_tokens} content tokens, in {model.config.chunk_tokens}-token independent chunks. "
                                       "CLS context is the mean of valid chunk CLS states. Single-run published-reference comparison.")
     else:
-        result["input_limit_note"] = f"Truncated-input variant: at most {model.config.max_content_tokens} content tokens per case; not the paper's 8192-token protocol."
+        result["input_limit_note"] = (f"Truncated-input variant: at most {model.config.max_content_tokens} content tokens per case. "
+                                      "Compare this limit and the text preprocessing with the specific reference paper.")
     if directory:
         report = save_result_files(directory, result)
     else:

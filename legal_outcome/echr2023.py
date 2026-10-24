@@ -122,6 +122,12 @@ def finish_reports(result_dir, result, summary, count):
     result.update(dataset_role='user-supplied processed ECHR2023/PILOT test file',
                   paper_test_examples=3000, actual_test_examples=count, training_epochs_completed=summary['completed_epochs'],
                   model_note='Existing proposed-architecture checkpoint; not a PILOT model reproduction')
+    if result.get('chunk_tokens') is None and result.get('max_content_tokens') is not None:
+        # Also correct older saved reports when reusing predictions. The 8192-token
+        # reference belongs to Haneesh3/ECtHR-A, not the PILOT first-dataset paper.
+        result['input_limit_note'] = (f"Truncated-input variant: at most {result['max_content_tokens']} content tokens per case. "
+                                      'PILOT Appendix B describes LLM-generated summaries capped at 512 output tokens; '
+                                      'the 8192-token reference belongs to the separate Haneesh3/ECtHR-A experiment.')
     save_result_files(result_dir, result)
     required = [('micro_f1', 'Micro F1'), ('micro_jaccard', 'Micro Jaccard'),
                 ('micro_pr_auc', 'Micro PR-AUC (trapezoidal)'), ('micro_roc_auc', 'Micro ROC-AUC')]
