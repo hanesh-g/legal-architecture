@@ -18,6 +18,8 @@ def test_old_checkpoint_without_revision_defaults_is_readable(tmp_path):
     payload = torch.load(file, weights_only=True)
     payload['contract']['config'].pop('legalbert_revision')
     payload['contract']['config'].pop('minilm_revision')
+    for name in ['chunk_tokens', 'encoder_chunk_batch_size', 'gradient_checkpointing']:
+        payload['contract']['config'].pop(name)
     torch.save(payload, file)
     epoch, history = load_training_state(file, model, optimizer, selector, contract)
     assert epoch == 1 and history == [{'epoch': 1}]

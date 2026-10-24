@@ -93,3 +93,7 @@ The standalone [ECtHR-A runner and PowerShell guide](ecthr_a_retrieval/README.md
 ## Train the proposed architecture on ECtHR-A
 
 Use the dedicated [preparation, training, recovery, and test guide](ecthr_a_proposed/README.md). The three commands are `python -m legal_outcome.ecthr_a prepare`, `train`, and `test`. This workflow trains the designed LegalBERT/token/span model with a new ten-label head. It has readable console summaries, persistent logs, JSON/CSV reports, pinned data/model revisions, a truncation audit, and reusable frozen MiniLM embeddings. It is separate from the optional Qwen retrieval baseline. The original 382-content-token limit is stated in every test report.
+
+## A single predeclared long-document experiment
+
+The [one-run protocol](one_run_ecTHR/README.md) adds an explicit long-document extension: 64 chunks × 128 packed tokens, global token/span evidence, mean chunk-CLS context, gradient checkpointing, effective batch size eight, and a fixed eight-epoch warmup/decay schedule. Use `python -m legal_outcome.one_run prepare`, `preflight`, `train`, and `test`. The protocol fixes the metric and references before training and reports the observed differences without claiming significance. It remains distinct from the original 382-content-token variant.

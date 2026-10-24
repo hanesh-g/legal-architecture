@@ -95,14 +95,15 @@ def restore_rng(state):
         torch.cuda.set_rng_state_all([x.cpu() for x in state['cuda']])
 
 
-def save_training_state(path, model, optimizer, selector, history, contract):
+def save_training_state(path, model, optimizer, selector, history, contract, scheduler=None):
     atomic_torch_save({'format_version': 1, 'model': model.state_dict(), 'optimizer': optimizer.state_dict(),
                       'best_model': selector.state, 'best_score': selector.best_score,
                       'best_epoch': selector.best_epoch, 'history': history, 'completed_epoch': history[-1]['epoch'],
-                      'contract': contract, 'rng': capture_rng()}, path)
+                      'contract': contract, 'rng': capture_rng(),
+                      'scheduler': scheduler.state_dict() if scheduler else None}, path)
 
 
-def load_training_state(path, model, optimizer, selector, contract):
+def load_training_state(path, model, optimizer, selector, contract, scheduler=None):
     payload = torch.load(path, map_location='cpu', weights_only=True)
     from .config import ModelConfig
     saved_contract = dict(payload['contract'])
@@ -111,6 +112,19 @@ def load_training_state(path, model, optimizer, selector, contract):
         raise ValueError('Resume settings or dataset differ from the saved run')
     model.load_state_dict(payload['model'])
     optimizer.load_state_dict(payload['optimizer'])
+    if scheduler is not None:
+        if payload.get('scheduler') is None:
+            raise ValueError('Recovery checkpoint has no learning-rate scheduler state')
+        scheduler.load_state_dict(payload['scheduler'])
     selector.state, selector.best_score, selector.best_epoch = payload['best_model'], payload['best_score'], payload['best_epoch']
     restore_rng(payload['rng'])
     return payload['completed_epoch'], payload['history']
+
+
+def linear_schedule(optimizer, total_updates, warmup_ratio):
+    warmup = int(total_updates * warmup_ratio)
+    def multiplier(step):
+        if step < warmup:
+            return step / max(1, warmup)
+        return max(0.0, (total_updates - step) / max(1, total_updates - warmup))
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, multiplier)

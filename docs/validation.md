@@ -4,7 +4,7 @@ Validation used Python 3.12 and the CPU package versions in `requirements-lock.t
 
 ## Passed
 
-- 57 main-project tests were verified across the full regression suite and targeted follow-up runs after the proposed ECtHR-A workflow update.
+- 67 main-project tests passed after the fixed one-run long-document update.
 - The single-label and multi-label command workflows each trained for two epochs on synthetic records. It saved a checkpoint, loaded it, evaluated two records, and predicted one document. The workflow used local small BERT and SentenceTransformer models.
 - Checkpoint recovery preserved predictions, class order, tokenizer settings, and cue patterns.
 - Both token attention branches received gradients. Span attention, graph mixing, fusion, and the encoder received gradients.
@@ -26,6 +26,10 @@ Validation used Python 3.12 and the CPU package versions in `requirements-lock.t
 - The proposed ECtHR-A adapter preserved class-index mapping and empty label lists on local fixtures. An eight-epoch tiny-BERT workflow resumed after epoch 3 and regenerated a final model from a saved epoch-8 state.
 - Readable tables, logs, history CSV, per-article CSV, text reports, prediction export, data hashes, and repeated-test result reuse were verified.
 - Frozen MiniLM cache reuse and random-state preservation were verified. Exact remote revisions identify reusable caches. Old recovery files without the new optional revision fields remained readable.
+
+- Full-window chunk packing retained 8,064 content tokens in 8,192 packed positions. Tail sensitivity, local position limits, padding masks, and gradients through checkpointed chunks were verified.
+- A fixed-profile fixture completed synthetic full-context preflight, was terminated after epoch 3, resumed to epoch 8, and matched an uninterrupted run's weights, scheduler state, and history. Warmup/decay and accumulated optimizer update counts were verified.
+- The primary published comparator and the encoder comparator were fixed before testing. Local fixtures were marked non-official and no significance claim was generated.
 
 ## Blocked
 

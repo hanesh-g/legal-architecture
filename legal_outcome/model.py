@@ -98,6 +98,12 @@ class LegalOutcomeModel(nn.Module):
             from transformers import AutoModel
             encoder = AutoModel.from_pretrained(config.legalbert_model, revision=config.legalbert_revision)
         self.encoder = encoder
+        if config.chunk_tokens and config.chunk_tokens > getattr(encoder.config, "max_position_embeddings", 512):
+            raise ValueError("Chunk size exceeds the encoder position limit")
+        if config.gradient_checkpointing:
+            if not hasattr(encoder, "gradient_checkpointing_enable"):
+                raise ValueError("Encoder does not support gradient checkpointing")
+            encoder.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
         for module in encoder.modules():
             if isinstance(module, nn.Dropout):
                 module.p = config.dropout
@@ -120,6 +126,33 @@ class LegalOutcomeModel(nn.Module):
         self.head_weight = nn.Parameter(torch.empty(labels, hidden * 3))
         self.head_bias = nn.Parameter(torch.zeros(labels))
         nn.init.xavier_uniform_(self.head_weight)
+
+    def encode_document(self, input_ids, attention_mask):
+        if self.config.chunk_tokens is None:
+            states = self.encoder(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
+            return states, states[:, 0]
+        batch, total = input_ids.shape
+        width = self.config.chunk_tokens
+        if total % width:
+            raise ValueError("Packed chunk sequence must be divisible by chunk width")
+        ids = input_ids.reshape(-1, width)
+        masks = attention_mask.reshape(-1, width)
+        valid = masks.bool().any(-1)
+        indices = torch.where(valid)[0]
+        if not len(indices):
+            raise ValueError("Document requires a visible chunk")
+        encoded = []
+        for start in range(0, len(indices), self.config.encoder_chunk_batch_size):
+            selected = indices[start:start + self.config.encoder_chunk_batch_size]
+            value = self.encoder(input_ids=ids[selected], attention_mask=masks[selected]).last_hidden_state
+            encoded.append(value)
+        values = torch.cat(encoded)
+        states = values.new_zeros(len(ids), width, values.shape[-1]).index_copy(0, indices, values)
+        chunks = total // width
+        cls = states[:, 0].reshape(batch, chunks, -1)
+        present = valid.reshape(batch, chunks)
+        context = (cls * present.unsqueeze(-1)).sum(1) / present.sum(1).clamp_min(1).unsqueeze(-1)
+        return states.reshape(batch, total, -1), context
 
     def forward(self, input_ids, attention_mask, span_ids, span_mask, cue_features,
                 semantic_embeddings, labels=None):
@@ -144,8 +177,7 @@ class LegalOutcomeModel(nn.Module):
         membership = span_ids[:, :, None] == torch.arange(n, device=span_ids.device)
         if not torch.equal(membership.any(1), span_mask):
             raise ValueError("Span mask must match populated token spans")
-        states = self.encoder(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
-        context = states[:, 0]
+        states, context = self.encode_document(input_ids, attention_mask)
         # All visible tokens (including CLS/SEP) participate in Token-LCA.
         token, token_weights = self.token_attention(states, token_mask)
         pooled = mean_span_pool(states, span_ids, span_mask)

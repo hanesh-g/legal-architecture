@@ -241,3 +241,27 @@ These explanations use a simplified technical English style. Each feature has th
 **Why:** A report must belong to the intended experiment.
 
 **How:** The workflow verifies training/validation file hashes and the ten-label head. It requires the chosen epoch budget. Repeating the same completed test command reads the saved report. A different model needs a new results folder.
+
+## 31. Long-document extension
+
+**What:** An optional input mode covers up to 8,192 packed positions in 64 local chunks.
+
+**Why:** The original 382-content-token limit can omit most case evidence.
+
+**How:** LegalBERT resets positions within each 128-token chunk. Token states return to document order. Global token attention and eight ordered token spans use all retained content. Document context is the mean of valid chunk CLS states. Two special tokens per chunk leave at most 8,064 content tokens. The original short input remains the default.
+
+## 32. Fixed one-run optimization
+
+**What:** A single profile fixes seed, epoch count, learning rates, dropout, frozen layers, and model selection.
+
+**Why:** Choosing settings after seeing test scores can inflate an improvement claim.
+
+**How:** One case is processed per microbatch. Eight microbatches form a nominal update batch of eight. AdamW uses a fixed linear schedule with 10% warmup. Recovery saves the scheduler state. Validation micro F1 selects the epoch at threshold 0.5. No threshold search uses test labels.
+
+## 33. Hardware preflight and named comparisons
+
+**What:** A synthetic full-context check precedes training. Final reports distinguish paper references by name.
+
+**Why:** GPU availability alone does not establish full-context memory fit. Beating one paper row does not imply beating every paper model.
+
+**How:** Preflight runs a full-window forward/backward pass with approximate optimizer-memory reservation, without parameter updates or dataset examples. The plan records code, data, software, references, and settings. Test results report differences from both GPT-5.2 and Legal-BERT and always identify the single-run limit.

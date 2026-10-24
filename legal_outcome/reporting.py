@@ -45,23 +45,32 @@ def percentage(value):
 
 def history_table(history):
     rows = []
+    show_updates = any('optimizer_updates' in record for record in history)
     for row in history:
         val, train = row.get('validation', {}), row.get('training', {})
-        rows.append([row['epoch'], f"{row['training_loss']:.4f}",
-                     f"{val['loss']:.4f}" if 'loss' in val else 'n/a',
-                     percentage(train.get('micro_f1')), percentage(val.get('micro_f1')),
-                     percentage(val.get('macro_f1')), 'YES' if row.get('selected') else ''])
-    return table(['Epoch', 'Train loss', 'Val loss', 'Train micro F1', 'Val micro F1', 'Val macro F1', 'New best'], rows)
+        values = [row['epoch'], f"{row['training_loss']:.4f}",
+                  f"{val['loss']:.4f}" if 'loss' in val else 'n/a',
+                  percentage(train.get('micro_f1')), percentage(val.get('micro_f1')),
+                  percentage(val.get('macro_f1'))]
+        if show_updates:
+            values.append(row.get('optimizer_updates', 'n/a'))
+        values.append('YES' if row.get('selected') else '')
+        rows.append(values)
+    headers = ['Epoch', 'Train loss', 'Val loss', 'Train micro F1', 'Val micro F1', 'Val macro F1']
+    if show_updates:
+        headers.append('Updates')
+    headers.append('New best')
+    return table(headers, rows)
 
 
 def write_history(directory, history):
     directory = Path(directory)
     json_file(directory / 'history.json', history)
     headers = ['epoch', 'training_loss', 'training_evaluation_loss', 'validation_loss', 'training_micro_f1',
-               'validation_micro_f1', 'validation_macro_f1', 'validation_exact_match_accuracy', 'new_best']
+               'validation_micro_f1', 'validation_macro_f1', 'validation_exact_match_accuracy', 'new_best', 'optimizer_updates', 'optimizer_group_lrs']
     rows = [[r['epoch'], r['training_loss'], r.get('training', {}).get('loss'), r.get('validation', {}).get('loss'),
              r.get('training', {}).get('micro_f1'), r.get('validation', {}).get('micro_f1'),
-             r.get('validation', {}).get('macro_f1'), r.get('validation', {}).get('exact_match_accuracy'), r.get('selected')]
+             r.get('validation', {}).get('macro_f1'), r.get('validation', {}).get('exact_match_accuracy'), r.get('selected'), r.get('optimizer_updates'), json.dumps(r.get('optimizer_group_lrs'))]
             for r in history]
     csv_file(directory / 'history.csv', headers, rows)
     atomic_text(directory / 'training-summary.txt', history_table(history) + '\n\nScores use percentages here and fractions in JSON/CSV. Training minibatch loss uses training-mode dropout.\n')

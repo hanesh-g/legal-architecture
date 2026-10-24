@@ -28,6 +28,8 @@ class DocumentProcessor:
                 raise ValueError(f"Tokenizer requires {name}")
 
     def __call__(self, text):
+        if self.config.chunk_tokens:
+            return self._chunked(text)
         spans = segment_document(text, self.config.max_spans)
         budget = self.config.max_tokens - 2
         # Use leading truncation, as in the source. Drop spans with no retained
@@ -54,6 +56,38 @@ class DocumentProcessor:
             "spans": retained,
             "cue_features": self.cues(retained),
         }
+
+
+    def _chunked(self, text):
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("Document text must be nonempty")
+        tokens = self.tokenizer.encode(text, add_special_tokens=False)[:self.config.max_content_tokens]
+        if not tokens:
+            raise ValueError("Document has no usable tokens")
+        # Keep at most eight ordered global spans over all retained content.
+        n = min(self.config.max_spans, len(tokens))
+        boundaries = [(i * len(tokens) // n, (i + 1) * len(tokens) // n) for i in range(n)]
+        content_spans = [-1] * len(tokens)
+        spans = []
+        for index, (start, end) in enumerate(boundaries):
+            content_spans[start:end] = [index] * (end - start)
+            spans.append(self.tokenizer.decode(tokens[start:end], skip_special_tokens=True))
+        width = self.config.chunk_tokens
+        content_width = width - 2
+        ids, masks, mapping = [], [], []
+        for start in range(0, len(tokens), content_width):
+            content = tokens[start:start + content_width]
+            span_ids = content_spans[start:start + content_width]
+            used = len(content) + 2
+            ids += [self.tokenizer.cls_token_id, *content, self.tokenizer.sep_token_id] + [self.tokenizer.pad_token_id] * (width - used)
+            masks += [1] * used + [0] * (width - used)
+            mapping += [-1, *span_ids, -1] + [-1] * (width - used)
+        padding = self.config.max_tokens - len(ids)
+        ids += [self.tokenizer.pad_token_id] * padding
+        masks += [0] * padding
+        mapping += [-1] * padding
+        return {"input_ids": torch.tensor(ids), "attention_mask": torch.tensor(masks),
+                "span_ids": torch.tensor(mapping), "spans": spans, "cue_features": self.cues(spans)}
 
 
 def collate_documents(items, semantic_encoder):

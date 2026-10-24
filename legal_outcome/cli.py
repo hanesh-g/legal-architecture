@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from .config import ModelConfig
-from .training import CheckpointSelector, make_optimizer, positive_weights, check_split_overlap, save_training_state, load_training_state
+from .training import CheckpointSelector, make_optimizer, positive_weights, check_split_overlap, save_training_state, load_training_state, linear_schedule
 from .data import DocumentProcessor, collate_documents
 from .model import LegalOutcomeModel
 from .reporting import history_table, write_history, result_table, save_result_files
@@ -33,7 +33,9 @@ def train(args):
                          task_type=args.task_type, threshold=args.threshold, dropout=args.dropout,
                          freeze_lower_layers=args.freeze_lower_layers,
                          legalbert_model=args.legalbert_model, minilm_model=args.minilm_model,
-                         legalbert_revision=args.legalbert_revision, minilm_revision=args.minilm_revision)
+                         legalbert_revision=args.legalbert_revision, minilm_revision=args.minilm_revision,
+                         chunk_tokens=args.chunk_tokens, encoder_chunk_batch_size=args.encoder_chunk_batch_size,
+                         gradient_checkpointing=args.gradient_checkpointing)
     if Path(args.output).exists() and not args.resume:
         raise ValueError("Output already exists. Use a new checkpoint directory")
     if args.epochs < 1 or args.learning_rate <= 0 or args.batch_size < 1:
@@ -43,6 +45,10 @@ def train(args):
         raise ValueError("Invalid learning rate or weight decay")
     if args.positive_weight_cap is not None and (config.task_type != "multi_label" or not math.isfinite(args.positive_weight_cap) or args.positive_weight_cap < 1):
         raise ValueError("Positive weight cap requires multi-label mode and a finite value of at least one")
+    if args.gradient_accumulation_steps < 1 or not 0 <= args.warmup_ratio < 1:
+        raise ValueError("Invalid gradient accumulation or warmup")
+    if args.lr_schedule == "constant" and args.warmup_ratio:
+        raise ValueError("Warmup requires a linear schedule")
     rows = read_records(args.data, config.labels, config.task_type)
     validation_rows = read_records(args.validation, config.labels, config.task_type) if args.validation else None
     selection = args.selection_metric
@@ -71,6 +77,9 @@ def train(args):
             cache_semantics(validation_items, semantic_encoder, args.semantic_cache, signature)
     model = LegalOutcomeModel(config).to(args.device)
     optimizer = make_optimizer(model, args.learning_rate, head_lr, args.weight_decay)
+    total_batches = math.ceil(len(items) / args.batch_size)
+    updates_per_epoch = math.ceil(total_batches / args.gradient_accumulation_steps)
+    scheduler = linear_schedule(optimizer, updates_per_epoch * args.epochs, args.warmup_ratio) if args.lr_schedule == "linear" else None
     selector = CheckpointSelector(selection)
     contract = {"config": config.to_dict(), "selection": selection, "seed": args.seed,
                 "batch_size": args.batch_size, "encoder_lr": args.learning_rate, "head_lr": head_lr,
@@ -80,13 +89,17 @@ def train(args):
                 "validation_sha256": hashlib.sha256(Path(args.validation).read_bytes()).hexdigest() if args.validation else None}
     if args.semantic_cache:
         contract["semantic_cache_enabled"] = True
+    if args.gradient_accumulation_steps != 1:
+        contract["gradient_accumulation_steps"] = args.gradient_accumulation_steps
+    if scheduler is not None:
+        contract["lr_schedule"] = {"type": args.lr_schedule, "warmup_ratio": args.warmup_ratio, "total_epochs": args.epochs}
     history, start_epoch = [], 0
     output_dir = Path(args.output)
     state_path = output_dir / "training-state.pt"
     if args.resume:
         if Path(args.resume).resolve() != state_path.resolve():
             raise ValueError("Resume file must be training-state.pt inside the output directory")
-        start_epoch, history = load_training_state(args.resume, model, optimizer, selector, contract)
+        start_epoch, history = load_training_state(args.resume, model, optimizer, selector, contract, scheduler=scheduler)
         if args.epochs < start_epoch:
             raise ValueError("Total epochs must be at least the completed checkpoint epochs")
         print(f"Resuming after epoch {start_epoch}; next epoch is {start_epoch + 1}", file=sys.stderr, flush=True)
@@ -95,24 +108,36 @@ def train(args):
     if args.display == "table":
         print(f"TRAINING | {len(items)} cases | {len(config.labels)} labels | {args.epochs} total epochs", flush=True)
         print(f"Device: {args.device} | seed: {args.seed} | selection: {selection}", flush=True)
-        print(f"Input limit: {config.max_tokens - 2} content tokens | decision threshold: {config.threshold}", flush=True)
+        print(f"Input limit: {config.max_content_tokens} content tokens | decision threshold: {config.threshold}", flush=True)
+        print(f"Microbatch: {args.batch_size} | accumulation: {args.gradient_accumulation_steps} | nominal effective batch: {args.batch_size * args.gradient_accumulation_steps}", flush=True)
+        print(f"Schedule: {args.lr_schedule} | warmup ratio: {args.warmup_ratio}", flush=True)
     for epoch in range(start_epoch, args.epochs):
         model.train()
         total = 0.0
         iterator = batches(items, args.batch_size, semantic_encoder, args.device, shuffle=True)
         progress = tqdm(iterator, total=math.ceil(len(items) / args.batch_size), desc=f"Epoch {epoch + 1}/{args.epochs}")
-        for batch in progress:
-            optimizer.zero_grad(set_to_none=True)
+        optimizer.zero_grad(set_to_none=True)
+        optimizer_updates = 0
+        for batch_index, batch in enumerate(progress):
             output = model(**batch)
             if not torch.isfinite(output["loss"]):
                 raise RuntimeError("Training loss is not finite")
-            output["loss"].backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
+            window_start = (batch_index // args.gradient_accumulation_steps) * args.gradient_accumulation_steps
+            window_size = min(args.gradient_accumulation_steps, total_batches - window_start)
+            (output["loss"] / window_size).backward()
+            if (batch_index + 1) % args.gradient_accumulation_steps == 0 or batch_index + 1 == total_batches:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                optimizer.step()
+                if scheduler is not None:
+                    scheduler.step()
+                optimizer.zero_grad(set_to_none=True)
+                optimizer_updates += 1
             total += output["loss"].item() * len(batch["labels"])
             if args.display == "table":
                 progress.set_postfix(loss=f"{output['loss'].item():.4f}", refresh=False)
         report = {"epoch": epoch + 1, "training_loss": total / len(items)}
+        if args.gradient_accumulation_steps != 1 or scheduler is not None:
+            report.update(optimizer_updates=optimizer_updates, optimizer_group_lrs=[group["lr"] for group in optimizer.param_groups])
         if validation_items:
             print("Evaluating validation set...", file=sys.stderr, flush=True)
             report["validation"] = evaluate(model, validation_items, semantic_encoder, args.batch_size, args.device, progress=args.display == "table")
@@ -121,7 +146,7 @@ def train(args):
             report["training"] = evaluate(model, items, semantic_encoder, args.batch_size, args.device, progress=args.display == "table")
         report["selected"] = selector.update(model, epoch + 1, report.get("validation"))
         history.append(report)
-        save_training_state(state_path, model, optimizer, selector, history, contract)
+        save_training_state(state_path, model, optimizer, selector, history, contract, scheduler=scheduler)
         write_history(output_dir, history)
         print(f"Checkpoint saved after epoch {epoch + 1}: {state_path}", file=sys.stderr, flush=True)
         print(history_table(history) if args.display == "table" else json.dumps(report), flush=True)
@@ -132,7 +157,10 @@ def train(args):
                     "weight_decay": args.weight_decay,
                     "data_sha256": contract["data_sha256"], "validation_sha256": contract["validation_sha256"],
                     "epochs": args.epochs, "learning_rate": args.learning_rate,
-                    "training_examples": len(items), "batch_size": args.batch_size}, allow_existing=True)
+                    "training_examples": len(items), "batch_size": args.batch_size,
+                    "gradient_accumulation_steps": args.gradient_accumulation_steps,
+                    "effective_batch_size": args.batch_size * args.gradient_accumulation_steps,
+                    "lr_schedule": args.lr_schedule, "warmup_ratio": args.warmup_ratio}, allow_existing=True)
     if args.display == "table":
         print(f"\nTRAINING COMPLETE | selected epoch: {selector.best_epoch} | {selection}: {selector.best_score:.6f}", flush=True)
         print(f"Prediction model: {output_dir / 'model.pt'}\nRecovery state: {state_path}", flush=True)
@@ -174,8 +202,15 @@ def score(args):
     result["selected_epoch"] = metadata.get("training_report", {}).get("selected_epoch")
     result["decision_threshold"] = model.config.threshold if model.config.task_type == "multi_label" else None
     result["max_packed_tokens"] = model.config.max_tokens
-    result["max_content_tokens"] = model.config.max_tokens - 2
-    result["input_limit_note"] = f"Truncated-input variant: at most {model.config.max_tokens - 2} content tokens per case; not the paper's 8192-token protocol."
+    result["max_content_tokens"] = model.config.max_content_tokens
+    result["input_variant"] = model.config.input_variant
+    result["chunk_tokens"] = model.config.chunk_tokens
+    if model.config.chunk_tokens:
+        result["input_limit_note"] = (f"Long-document extension: at most {model.config.max_tokens} packed positions and "
+                                      f"{model.config.max_content_tokens} content tokens, in {model.config.chunk_tokens}-token independent chunks. "
+                                      "CLS context is the mean of valid chunk CLS states. Single-run published-reference comparison.")
+    else:
+        result["input_limit_note"] = f"Truncated-input variant: at most {model.config.max_content_tokens} content tokens per case; not the paper's 8192-token protocol."
     if directory:
         report = save_result_files(directory, result)
     else:
@@ -232,6 +267,12 @@ def main(argv=None):
     p.add_argument("--display", choices=["json", "table"], default="json")
     p.add_argument("--max-tokens", type=int, default=384)
     p.add_argument("--max-spans", type=int, default=8)
+    p.add_argument("--chunk-tokens", type=int)
+    p.add_argument("--encoder-chunk-batch-size", type=int, default=1)
+    p.add_argument("--gradient-checkpointing", action="store_true")
+    p.add_argument("--gradient-accumulation-steps", type=int, default=1)
+    p.add_argument("--lr-schedule", choices=["constant", "linear"], default="constant")
+    p.add_argument("--warmup-ratio", type=float, default=0.0)
     p.add_argument("--freeze-lower-layers", type=int, default=0)
     p.add_argument("--device", default="cpu")
     p.set_defaults(run=train)

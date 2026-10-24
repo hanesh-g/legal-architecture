@@ -103,7 +103,9 @@ def prepare(args):
     from transformers import AutoTokenizer
     reference = references['legalbert']
     tokenizer = AutoTokenizer.from_pretrained(reference['name'], revision=reference['revision'])
-    config = ModelConfig(tuple(LABELS), max_tokens=args.max_tokens, task_type='multi_label')
+    config = ModelConfig(tuple(LABELS), max_tokens=args.max_tokens, task_type='multi_label',
+                         chunk_tokens=args.chunk_tokens, encoder_chunk_batch_size=args.encoder_chunk_batch_size,
+                         gradient_checkpointing=args.gradient_checkpointing)
     processor = DocumentProcessor(tokenizer, config)
     prepared = {('val' if split == 'validation' else split): convert_rows(records, split) for split, records in rows.items()}
     directory.mkdir(parents=True, exist_ok=False)
@@ -117,7 +119,7 @@ def prepare(args):
         for row in tqdm(records, desc=f'{split}: token coverage audit'):
             full = len(tokenizer(row['text'], add_special_tokens=False, truncation=False, verbose=False)['input_ids'])
             item = processor(row['text'])
-            kept = int(item['attention_mask'].sum()) - 2
+            kept = int((item['span_ids'] >= 0).sum())
             count = len(item['spans'])
             token_counts.append(full); kept_counts.append(kept); retained_spans.append(count)
             coverage_rows.append([split, row['case_id'], full, kept, count, full > kept])
@@ -129,14 +131,15 @@ def prepare(args):
     overlap = {f'{a}/{b}': len(text_sets[a] & text_sets[b]) for a, b in [('train', 'val'), ('train', 'test'), ('val', 'test')]}
     manifest = {'format_version': 1, 'source': source, 'labels': LABELS, 'models': references,
                 'files': hashes, 'audit': summary, 'normalized_text_overlap': overlap,
-                'max_packed_tokens': args.max_tokens, 'max_content_tokens': args.max_tokens - 2,
-                'variant': 'proposed_architecture_leading_truncation', 'ready_for_training': overlap['train/val'] == 0,
+                'max_packed_tokens': args.max_tokens, 'max_content_tokens': config.max_content_tokens,
+                'chunk_tokens': config.chunk_tokens, 'encoder_chunk_batch_size': config.encoder_chunk_batch_size,
+                'gradient_checkpointing': config.gradient_checkpointing, 'variant': config.input_variant, 'ready_for_training': overlap['train/val'] == 0,
                 'case_id_note': 'Generated source-row references, not verified court case identifiers',
                 'test_policy': 'Test labels are not used for training or checkpoint selection'}
     csv_file(directory / 'token-coverage.csv', ['split', 'row_reference', 'full_content_tokens', 'retained_content_tokens', 'retained_spans', 'truncated'], coverage_rows)
     json_file(directory / 'dataset-manifest.json', manifest)
     print(dataset_table(manifest))
-    print(f'Input variant: at most {args.max_tokens - 2} content tokens; not the paper\'s 8192-token setting.')
+    print(f'Input variant: {config.input_variant}; at most {config.max_content_tokens} content tokens in {config.max_tokens} packed positions.')
     print(f'Data and coverage audit saved to {directory}', flush=True)
     if not manifest['ready_for_training']:
         raise ValueError('Official train/validation text overlap found. Files preserved for review; do not train before inspection')
@@ -190,6 +193,12 @@ def train(args):
                '--threshold', '.5', '--seed', str(args.seed), '--max-tokens', str(manifest['max_packed_tokens']),
                '--legalbert-model', model['name'], '--minilm-model', semantic['name'], '--device', args.device,
                '--display', 'table', '--report-training-metrics', '--semantic-cache', str(args.semantic_cache)]
+    if manifest.get('chunk_tokens'):
+        command += ['--chunk-tokens', str(manifest['chunk_tokens']), '--encoder-chunk-batch-size', str(manifest['encoder_chunk_batch_size'])]
+    if manifest.get('gradient_checkpointing'):
+        command += ['--gradient-checkpointing']
+    command += ['--gradient-accumulation-steps', str(args.gradient_accumulation_steps),
+                '--lr-schedule', args.lr_schedule, '--warmup-ratio', str(args.warmup_ratio)]
     if args.head_learning_rate is not None:
         command += ['--head-learning-rate', str(args.head_learning_rate)]
     if model['revision']:
@@ -220,7 +229,7 @@ def test(args):
     config = metadata['model_config']
     if config['labels'] != LABELS or config['task_type'] != 'multi_label':
         raise ValueError('Checkpoint is not the expected ten-label ECtHR-A model')
-    if config['max_tokens'] != manifest['max_packed_tokens']:
+    if config['max_tokens'] != manifest['max_packed_tokens'] or config.get('chunk_tokens') != manifest.get('chunk_tokens'):
         raise ValueError('Input limit differs from the prepared experiment')
     report = metadata['training_report']
     if report.get('data_sha256') != manifest['files']['train']['sha256'] or report.get('validation_sha256') != manifest['files']['val']['sha256']:
@@ -262,7 +271,7 @@ def test(args):
              ['method', 'source', 'maximum_packed_tokens', 'micro_f1', 'macro_f1'], comparison)
     atomic_text(result_dir / 'comparison-notes.txt',
                 'Published reference values come from Haneesh3 Table 3. They are not locally reproduced results.\n'
-                'The proposed architecture uses at most 384 packed tokens (382 content), versus the paper context of 8192 tokens.\n'
+                f'The proposed run uses {config["max_tokens"]} packed positions; the paper context cap is 8192. Model aggregation and other settings can still differ.\n'
                 'A numerical difference alone does not establish a controlled improvement. Label/scoring definitions, context, seeds, and selection must be reported.\n'
                 'No 2-3 percentage-point gain is assumed or guaranteed.\n')
     print(f'Final reports saved to: {result_dir}')
@@ -278,6 +287,9 @@ def main(argv=None):
     p.add_argument('--legalbert-model', default='nlpaueb/legal-bert-base-uncased')
     p.add_argument('--minilm-model', default='sentence-transformers/all-MiniLM-L6-v2')
     p.add_argument('--max-tokens', type=int, default=384)
+    p.add_argument('--chunk-tokens', type=int)
+    p.add_argument('--encoder-chunk-batch-size', type=int, default=1)
+    p.add_argument('--gradient-checkpointing', action='store_true')
     p.add_argument('--local-data', help='JSONL fixtures/custom data only; the result is marked non-official')
     p.set_defaults(run=prepare)
     p = sub.add_parser('train', help='Train the proposed architecture, with epoch checkpoints')
@@ -290,6 +302,9 @@ def main(argv=None):
     p.add_argument('--dropout', type=float, default=.1)
     p.add_argument('--freeze-lower-layers', type=int, default=0)
     p.add_argument('--seed', type=int, default=42)
+    p.add_argument('--gradient-accumulation-steps', type=int, default=1)
+    p.add_argument('--lr-schedule', choices=['constant', 'linear'], default='constant')
+    p.add_argument('--warmup-ratio', type=float, default=0.0)
     p.add_argument('--device', choices=['cpu', 'cuda'], default='cuda')
     p.add_argument('--semantic-cache', default='cache/ecthr_a_semantics')
     p.add_argument('--logs', default='logs')

@@ -11,6 +11,9 @@ class ModelConfig:
     minilm_revision: str | None = None
     max_tokens: int = 384
     max_spans: int = 8
+    chunk_tokens: int | None = None
+    encoder_chunk_batch_size: int = 1
+    gradient_checkpointing: bool = False
     dropout: float = 0.1
     task_type: str = "single_label"
     threshold: float = 0.5
@@ -37,14 +40,32 @@ class ModelConfig:
             raise ValueError("Use at least two distinct labels")
         if any(not isinstance(x, str) or not x.strip() for x in self.labels):
             raise ValueError("Labels must be nonempty strings")
-        if not 1 <= self.max_spans <= 8 or not 3 <= self.max_tokens <= 384:
-            raise ValueError("Require 1–8 spans and 3–384 tokens")
+        if not 1 <= self.max_spans <= 8:
+            raise ValueError("Require 1–8 spans")
+        if self.chunk_tokens is None:
+            if not 3 <= self.max_tokens <= 384:
+                raise ValueError("Unchunked input requires 3–384 tokens")
+        elif (not 8 <= self.chunk_tokens <= 512 or self.max_tokens < self.chunk_tokens
+              or self.max_tokens > 8192 or self.max_tokens % self.chunk_tokens):
+            raise ValueError("Chunked input requires 8–512 tokens per chunk and a divisible total of at most 8192")
+        if not 1 <= self.encoder_chunk_batch_size <= 64:
+            raise ValueError("Encoder chunk batch size must be between 1 and 64")
         if not 0 <= self.dropout < 1 or self.graph_layers < 1:
             raise ValueError("Invalid dropout or graph layer count")
         if self.order_decay <= 0 or self.cue_scale < 0:
             raise ValueError("Invalid refinement or order scale")
         if not 0 <= self.freeze_lower_layers <= 12:
             raise ValueError("freeze_lower_layers must be between 0 and 12")
+
+    @property
+    def max_content_tokens(self):
+        if self.chunk_tokens:
+            return (self.max_tokens // self.chunk_tokens) * (self.chunk_tokens - 2)
+        return self.max_tokens - 2
+
+    @property
+    def input_variant(self):
+        return "long_document_chunked_extension" if self.chunk_tokens else "proposed_architecture_leading_truncation"
 
     def to_dict(self):
         return asdict(self)
