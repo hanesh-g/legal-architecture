@@ -104,7 +104,10 @@ def save_training_state(path, model, optimizer, selector, history, contract):
 
 def load_training_state(path, model, optimizer, selector, contract):
     payload = torch.load(path, map_location='cpu', weights_only=True)
-    if payload.get('format_version') != 1 or payload['contract'] != contract:
+    from .config import ModelConfig
+    saved_contract = dict(payload['contract'])
+    saved_contract['config'] = ModelConfig(**saved_contract['config']).to_dict()
+    if payload.get('format_version') != 1 or saved_contract != contract:
         raise ValueError('Resume settings or dataset differ from the saved run')
     model.load_state_dict(payload['model'])
     optimizer.load_state_dict(payload['optimizer'])

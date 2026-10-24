@@ -209,3 +209,35 @@ These explanations use a simplified technical English style. Each feature has th
 **Why:** The PILOT paper requires measures beyond the original F1 report.
 
 **How:** Jaccard uses pooled binary decisions. The AUC calculations pool continuous article probabilities and group tied scores. The evaluator reports the PR-AUC definition and keeps average precision separate. Undefined AUC values are null with an explanation. The selected checkpoint can be evaluated again without training.
+
+## 27. ECtHR-A preparation and audit
+
+**What:** The workflow downloads official ECtHR-A data and converts its ten article indices to names.
+
+**Why:** The earlier ECHR2023 model used a different set of 16 labels.
+
+**How:** Preparation preserves the official splits and empty label lists. It records source/model revisions, file hashes, token retention, and retained span counts. It stops on training/validation text overlap.
+
+## 28. Readable training and test reports
+
+**What:** The workflow prints epoch and per-article tables. It saves logs, JSON, CSV, and a text report.
+
+**Why:** Users need to see progress and extract results without reading a long JSON line.
+
+**How:** Console tables show percentages. Machine-readable files retain fraction values. The report identifies the selected epoch and input limit. Published paper rows remain separate from locally measured results.
+
+## 29. Frozen MiniLM feature cache
+
+**What:** The workflow computes frozen span embeddings once and reuses them in later epochs.
+
+**Why:** Repeated CPU encoding wastes time when MiniLM weights and span text do not change.
+
+**How:** Cache keys include retained span text and model identity. Cached features enter the graph only. LegalBERT states remain trainable. Cache hits and misses preserve random state.
+
+## 30. Final test identity checks
+
+**What:** Test evaluation checks the prepared data and saved model identity.
+
+**Why:** A report must belong to the intended experiment.
+
+**How:** The workflow verifies training/validation file hashes and the ten-label head. It requires the chosen epoch budget. Repeating the same completed test command reads the saved report. A different model needs a new results folder.

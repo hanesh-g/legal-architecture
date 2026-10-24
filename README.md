@@ -89,3 +89,7 @@ See [the Haneesh1/Haneesh3 completion plan](docs/faculty_completion_plan.md). Mu
 ## Separate ECtHR-A retrieval experiment
 
 The standalone [ECtHR-A runner and PowerShell guide](ecthr_a_retrieval/README.md) implement the frozen Qwen3-0.6B document-retrieval baseline for Haneesh3. It has its own dependencies and output files. The [downloadable ZIP](downloads/ecthr-a-retrieval.zip) contains code, tests, and instructions; it downloads the public dataset on first use. Validation selects k and threshold before test evaluation.
+
+## Train the proposed architecture on ECtHR-A
+
+Use the dedicated [preparation, training, recovery, and test guide](ecthr_a_proposed/README.md). The three commands are `python -m legal_outcome.ecthr_a prepare`, `train`, and `test`. This workflow trains the designed LegalBERT/token/span model with a new ten-label head. It has readable console summaries, persistent logs, JSON/CSV reports, pinned data/model revisions, a truncation audit, and reusable frozen MiniLM embeddings. It is separate from the optional Qwen retrieval baseline. The original 382-content-token limit is stated in every test report.

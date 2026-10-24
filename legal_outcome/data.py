@@ -61,8 +61,14 @@ def collate_documents(items, semantic_encoder):
         raise ValueError("Cannot collate an empty batch")
     n = max(len(x["spans"]) for x in items)
     flat = [s for x in items for s in x["spans"]]
-    with torch.no_grad():
-        embeddings = semantic_encoder.encode(flat, convert_to_tensor=True, normalize_embeddings=True)
+    cached = ["semantic_embeddings" in item for item in items]
+    if any(cached) and not all(cached):
+        raise ValueError("Batch mixes cached and uncached semantic features")
+    if all(cached):
+        embeddings = torch.cat([item["semantic_embeddings"] for item in items])
+    else:
+        with torch.no_grad():
+            embeddings = semantic_encoder.encode(flat, convert_to_tensor=True, normalize_embeddings=True)
     embeddings = torch.as_tensor(embeddings).detach().cpu().float()
     if embeddings.ndim != 2 or embeddings.shape[0] != len(flat):
         raise ValueError("Semantic encoder returned an invalid shape")

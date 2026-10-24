@@ -7,6 +7,8 @@ class ModelConfig:
     labels: tuple[str, ...]
     legalbert_model: str = "nlpaueb/legal-bert-base-uncased"
     minilm_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    legalbert_revision: str | None = None
+    minilm_revision: str | None = None
     max_tokens: int = 384
     max_spans: int = 8
     dropout: float = 0.1

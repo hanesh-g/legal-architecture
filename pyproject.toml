@@ -11,6 +11,7 @@ dependencies = ["torch>=2.6,<3", "transformers>=4.46,<5", "sentence-transformers
 
 [project.optional-dependencies]
 test = ["pytest>=8,<10"]
+data = ["datasets>=3,<5", "huggingface-hub>=0.30,<1"]
 
 [project.scripts]
 legal-outcome = "legal_outcome.cli:main"

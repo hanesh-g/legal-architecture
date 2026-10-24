@@ -14,6 +14,8 @@ from .config import ModelConfig
 from .training import CheckpointSelector, make_optimizer, positive_weights, check_split_overlap, save_training_state, load_training_state
 from .data import DocumentProcessor, collate_documents
 from .model import LegalOutcomeModel
+from .reporting import history_table, write_history, result_table, save_result_files
+from .semantic_cache import cache_semantics, model_signature
 from .runtime import read_records, prepare_records, batches, evaluate, save_checkpoint, load_checkpoint
 
 
@@ -30,7 +32,8 @@ def train(args):
     config = ModelConfig(tuple(args.labels), max_tokens=args.max_tokens, max_spans=args.max_spans,
                          task_type=args.task_type, threshold=args.threshold, dropout=args.dropout,
                          freeze_lower_layers=args.freeze_lower_layers,
-                         legalbert_model=args.legalbert_model, minilm_model=args.minilm_model)
+                         legalbert_model=args.legalbert_model, minilm_model=args.minilm_model,
+                         legalbert_revision=args.legalbert_revision, minilm_revision=args.minilm_revision)
     if Path(args.output).exists() and not args.resume:
         raise ValueError("Output already exists. Use a new checkpoint directory")
     if args.epochs < 1 or args.learning_rate <= 0 or args.batch_size < 1:
@@ -53,14 +56,19 @@ def train(args):
     if validation_rows:
         check_split_overlap(rows, validation_rows)
     print("Preparing tokenizer and documents...", file=sys.stderr, flush=True)
-    processor = DocumentProcessor(AutoTokenizer.from_pretrained(config.legalbert_model), config)
+    processor = DocumentProcessor(AutoTokenizer.from_pretrained(config.legalbert_model, revision=config.legalbert_revision), config)
     items = prepare_records(rows, processor)
     validation_items = prepare_records(validation_rows, processor) if validation_rows else None
     print("Loading MiniLM and LegalBERT...", file=sys.stderr, flush=True)
-    semantic_encoder = SentenceTransformer(config.minilm_model, device="cpu")
+    semantic_encoder = SentenceTransformer(config.minilm_model, revision=config.minilm_revision, device="cpu")
     if args.positive_weight_cap is not None:
         config = replace(config, positive_weights=positive_weights(items, args.positive_weight_cap))
         processor.config = config
+    if args.semantic_cache:
+        signature = model_signature(semantic_encoder, config.minilm_model, config.minilm_revision)
+        cache_semantics(items, semantic_encoder, args.semantic_cache, signature)
+        if validation_items:
+            cache_semantics(validation_items, semantic_encoder, args.semantic_cache, signature)
     model = LegalOutcomeModel(config).to(args.device)
     optimizer = make_optimizer(model, args.learning_rate, head_lr, args.weight_decay)
     selector = CheckpointSelector(selection)
@@ -70,6 +78,8 @@ def train(args):
                 "report_training_metrics": args.report_training_metrics,
                 "data_sha256": hashlib.sha256(Path(args.data).read_bytes()).hexdigest(),
                 "validation_sha256": hashlib.sha256(Path(args.validation).read_bytes()).hexdigest() if args.validation else None}
+    if args.semantic_cache:
+        contract["semantic_cache_enabled"] = True
     history, start_epoch = [], 0
     output_dir = Path(args.output)
     state_path = output_dir / "training-state.pt"
@@ -77,16 +87,21 @@ def train(args):
         if Path(args.resume).resolve() != state_path.resolve():
             raise ValueError("Resume file must be training-state.pt inside the output directory")
         start_epoch, history = load_training_state(args.resume, model, optimizer, selector, contract)
-        if args.epochs <= start_epoch:
-            raise ValueError("Total epochs must exceed completed checkpoint epochs")
+        if args.epochs < start_epoch:
+            raise ValueError("Total epochs must be at least the completed checkpoint epochs")
         print(f"Resuming after epoch {start_epoch}; next epoch is {start_epoch + 1}", file=sys.stderr, flush=True)
     else:
         output_dir.mkdir(parents=True, exist_ok=False)
+    if args.display == "table":
+        print(f"TRAINING | {len(items)} cases | {len(config.labels)} labels | {args.epochs} total epochs", flush=True)
+        print(f"Device: {args.device} | seed: {args.seed} | selection: {selection}", flush=True)
+        print(f"Input limit: {config.max_tokens - 2} content tokens | decision threshold: {config.threshold}", flush=True)
     for epoch in range(start_epoch, args.epochs):
         model.train()
         total = 0.0
         iterator = batches(items, args.batch_size, semantic_encoder, args.device, shuffle=True)
-        for batch in tqdm(iterator, total=math.ceil(len(items) / args.batch_size), desc=f"Epoch {epoch + 1}/{args.epochs}"):
+        progress = tqdm(iterator, total=math.ceil(len(items) / args.batch_size), desc=f"Epoch {epoch + 1}/{args.epochs}")
+        for batch in progress:
             optimizer.zero_grad(set_to_none=True)
             output = model(**batch)
             if not torch.isfinite(output["loss"]):
@@ -95,26 +110,32 @@ def train(args):
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
             total += output["loss"].item() * len(batch["labels"])
+            if args.display == "table":
+                progress.set_postfix(loss=f"{output['loss'].item():.4f}", refresh=False)
         report = {"epoch": epoch + 1, "training_loss": total / len(items)}
         if validation_items:
             print("Evaluating validation set...", file=sys.stderr, flush=True)
-            report["validation"] = evaluate(model, validation_items, semantic_encoder, args.batch_size, args.device)
+            report["validation"] = evaluate(model, validation_items, semantic_encoder, args.batch_size, args.device, progress=args.display == "table")
         if args.report_training_metrics:
             print("Evaluating training set...", file=sys.stderr, flush=True)
-            report["training"] = evaluate(model, items, semantic_encoder, args.batch_size, args.device)
+            report["training"] = evaluate(model, items, semantic_encoder, args.batch_size, args.device, progress=args.display == "table")
         report["selected"] = selector.update(model, epoch + 1, report.get("validation"))
         history.append(report)
         save_training_state(state_path, model, optimizer, selector, history, contract)
-        (output_dir / "history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
+        write_history(output_dir, history)
         print(f"Checkpoint saved after epoch {epoch + 1}: {state_path}", file=sys.stderr, flush=True)
-        print(json.dumps(report), flush=True)
+        print(history_table(history) if args.display == "table" else json.dumps(report), flush=True)
     selector.restore(model)
     save_checkpoint(args.output, model, processor, {"seed": args.seed, "history": history,
                     "selected_epoch": selector.best_epoch, "selection_metric": selection,
                     "selection_score": selector.best_score, "head_learning_rate": head_lr,
                     "weight_decay": args.weight_decay,
+                    "data_sha256": contract["data_sha256"], "validation_sha256": contract["validation_sha256"],
                     "epochs": args.epochs, "learning_rate": args.learning_rate,
                     "training_examples": len(items), "batch_size": args.batch_size}, allow_existing=True)
+    if args.display == "table":
+        print(f"\nTRAINING COMPLETE | selected epoch: {selector.best_epoch} | {selection}: {selector.best_score:.6f}", flush=True)
+        print(f"Prediction model: {output_dir / 'model.pt'}\nRecovery state: {state_path}", flush=True)
 
 
 def predict(args):
@@ -141,11 +162,25 @@ def predict(args):
 def score(args):
     model, processor, semantic = load_checkpoint(args.checkpoint, args.device)
     items = prepare_records(read_records(args.data, model.config.labels, model.config.task_type), processor)
-    result = evaluate(model, items, semantic, args.batch_size, args.device)
+    if args.semantic_cache:
+        cache_semantics(items, semantic, args.semantic_cache, model_signature(semantic, model.config.minilm_model, model.config.minilm_revision))
+    directory = Path(args.results_dir) if args.results_dir else None
+    if directory:
+        directory.mkdir(parents=True, exist_ok=True)
+    result = evaluate(model, items, semantic, args.batch_size, args.device,
+                      predictions_path=directory / "predictions.pt" if directory else None,
+                      progress=args.display == "table")
     metadata = json.loads((Path(args.checkpoint) / "metadata.json").read_text(encoding="utf-8"))
     result["selected_epoch"] = metadata.get("training_report", {}).get("selected_epoch")
     result["decision_threshold"] = model.config.threshold if model.config.task_type == "multi_label" else None
-    print(json.dumps(result, indent=2))
+    result["max_packed_tokens"] = model.config.max_tokens
+    result["max_content_tokens"] = model.config.max_tokens - 2
+    result["input_limit_note"] = f"Truncated-input variant: at most {model.config.max_tokens - 2} content tokens per case; not the paper's 8192-token protocol."
+    if directory:
+        report = save_result_files(directory, result)
+    else:
+        report = result_table(result)
+    print(report if args.display == "table" else json.dumps(result, indent=2))
 
 
 def smoke(args):
@@ -168,7 +203,7 @@ def smoke(args):
                       "note": "Tiny random BERT; no trained legal predictions or model downloads"}))
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     p = sub.add_parser("train")
@@ -191,6 +226,10 @@ def main():
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--legalbert-model", default="nlpaueb/legal-bert-base-uncased")
     p.add_argument("--minilm-model", default="sentence-transformers/all-MiniLM-L6-v2")
+    p.add_argument("--legalbert-revision")
+    p.add_argument("--minilm-revision")
+    p.add_argument("--semantic-cache")
+    p.add_argument("--display", choices=["json", "table"], default="json")
     p.add_argument("--max-tokens", type=int, default=384)
     p.add_argument("--max-spans", type=int, default=8)
     p.add_argument("--freeze-lower-layers", type=int, default=0)
@@ -207,10 +246,13 @@ def main():
     p.add_argument("--data", required=True)
     p.add_argument("--batch-size", type=int, default=2)
     p.add_argument("--device", default="cpu")
+    p.add_argument("--display", choices=["json", "table"], default="json")
+    p.add_argument("--results-dir")
+    p.add_argument("--semantic-cache")
     p.set_defaults(run=score)
     p = sub.add_parser("smoke")
     p.set_defaults(run=smoke)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     args.run(args)
 
 

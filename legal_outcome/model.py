@@ -96,7 +96,7 @@ class LegalOutcomeModel(nn.Module):
         self.config = config
         if encoder is None:
             from transformers import AutoModel
-            encoder = AutoModel.from_pretrained(config.legalbert_model)
+            encoder = AutoModel.from_pretrained(config.legalbert_model, revision=config.legalbert_revision)
         self.encoder = encoder
         for module in encoder.modules():
             if isinstance(module, nn.Dropout):

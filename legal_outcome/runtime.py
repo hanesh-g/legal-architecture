@@ -1,5 +1,7 @@
 """Training data, checkpoint storage, and evaluation helpers."""
 import json
+import math
+from tqdm.auto import tqdm
 from pathlib import Path
 import torch
 from .config import ModelConfig
@@ -87,19 +89,27 @@ def metrics(targets, predictions, label_names, task_type="single_label"):
 
 
 @torch.no_grad()
-def evaluate(model, items, semantic_encoder, batch_size, device):
+def evaluate(model, items, semantic_encoder, batch_size, device, *, predictions_path=None, progress=False):
     model.eval()
     targets, predictions, probabilities, loss_sum = [], [], [], 0.0
-    for batch in batches(items, batch_size, semantic_encoder, device):
+    iterator = batches(items, batch_size, semantic_encoder, device)
+    if progress:
+        iterator = tqdm(iterator, total=math.ceil(len(items) / batch_size), desc="Evaluation")
+    for batch in iterator:
         output = model(**batch)
         targets.extend(batch["labels"].tolist())
         predictions.extend(output["predictions"].tolist())
-        if model.config.task_type == "multi_label":
+        if model.config.task_type == "multi_label" or predictions_path:
             probabilities.extend(output["probabilities"].detach().cpu().float().tolist())
         loss_sum += output["loss"].item() * len(batch["labels"])
     result = {**metrics(targets, predictions, model.config.labels, model.config.task_type), "loss": loss_sum / len(items)}
     if model.config.task_type == "multi_label":
         result.update(ranking_metrics(targets, probabilities))
+    if predictions_path:
+        from .training import atomic_torch_save
+        atomic_torch_save({"targets": torch.as_tensor(targets), "probabilities": torch.as_tensor(probabilities),
+                           "predictions": torch.as_tensor(predictions), "labels": list(model.config.labels),
+                           "task_type": model.config.task_type}, predictions_path)
     return result
 
 
@@ -130,5 +140,5 @@ def load_checkpoint(path, device):
     model.to(device).eval()
     processor = DocumentProcessor(AutoTokenizer.from_pretrained(path / "tokenizer", local_files_only=True), config,
                                   CueExtractor(metadata["cue_patterns"]))
-    semantic_encoder = SentenceTransformer(config.minilm_model, device="cpu")
+    semantic_encoder = SentenceTransformer(config.minilm_model, revision=config.minilm_revision, device="cpu")
     return model, processor, semantic_encoder
