@@ -8,6 +8,8 @@ Use the first paper's evaluation protocol for the completed ECHR2023 experiment.
 
 ## Track 1: evaluate the completed ECHR2023 model
 
+Use the newer [step-by-step first-dataset guide](../first_dataset/README.md) for checkpoint inspection, recovery export, and complete PowerShell commands. It uses the original processed ECHR2023 test file with `text` and `labels` fields. A raw PILOT file with `facts` and `violated_articles` is not a direct evaluator input.
+
 The paper's four primary measures, in its Section 5 and Table 1, are:
 
 | Measure | Saved predictions needed |
@@ -30,7 +32,7 @@ Steps:
 5. Run evaluation once with the selected ECHR checkpoint and the ECHR2023 test file. Change the paths below to the actual locations.
 
 ```powershell
-.\.venv\Scripts\python.exe -m legal_outcome.cli evaluate --checkpoint checkpoints/baseline_safe --data "C:\24071a3224\Datasets\Datasets\PILOT\test.jsonl" --device cuda > echr2023-paper-test.json
+.\.venv\Scripts\python.exe -m legal_outcome.cli evaluate --checkpoint checkpoints/baseline_safe --data "data\test.jsonl" --device cuda > echr2023-paper-test.json
 ```
 
 6. Read echr2023-paper-test.json and attach metadata.json to the final results. Report the actual test example count.

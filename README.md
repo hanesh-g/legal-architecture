@@ -86,6 +86,8 @@ On successful completion, the usual `model.pt`, `metadata.json`, and tokenizer a
 
 See [the Haneesh1/Haneesh3 completion plan](docs/faculty_completion_plan.md). Multi-label evaluation now includes micro Jaccard, trapezoidal PR-AUC, average precision, and ROC-AUC from continuous model probabilities. Existing saved prediction checkpoints do not need retraining for these additional metrics.
 
+For the completed first dataset, use the [ECHR2023 test guide](first_dataset/README.md) and [evaluation package](downloads/echr2023-evaluation.zip). `python -m legal_outcome.echr2023 inspect` checks the saved task and epoch count. `evaluate` uses the original selected model, can export its saved best weights from a completed recovery checkpoint, and saves readable paper measures without retraining. Keep the original processed ECHR2023 test split; this is separate from LexGLUE ECtHR-A.
+
 ## Separate ECtHR-A retrieval experiment
 
 The standalone [ECtHR-A runner and PowerShell guide](ecthr_a_retrieval/README.md) implement the frozen Qwen3-0.6B document-retrieval baseline for Haneesh3. It has its own dependencies and output files. The [downloadable ZIP](downloads/ecthr-a-retrieval.zip) contains code, tests, and instructions; it downloads the public dataset on first use. Validation selects k and threshold before test evaluation.
