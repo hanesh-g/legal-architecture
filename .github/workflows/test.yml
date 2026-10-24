@@ -17,3 +17,6 @@ jobs:
       - run: legal-outcome smoke
         env:
           OMP_NUM_THREADS: '2'
+      - run: python -m pytest -q ecthr_a_retrieval/tests
+        env:
+          OMP_NUM_THREADS: '2'

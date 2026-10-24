@@ -85,3 +85,7 @@ On successful completion, the usual `model.pt`, `metadata.json`, and tokenizer a
 ## Faculty paper evaluation
 
 See [the Haneesh1/Haneesh3 completion plan](docs/faculty_completion_plan.md). Multi-label evaluation now includes micro Jaccard, trapezoidal PR-AUC, average precision, and ROC-AUC from continuous model probabilities. Existing saved prediction checkpoints do not need retraining for these additional metrics.
+
+## Separate ECtHR-A retrieval experiment
+
+The standalone [ECtHR-A runner and PowerShell guide](ecthr_a_retrieval/README.md) implement the frozen Qwen3-0.6B document-retrieval baseline for Haneesh3. It has its own dependencies and output files. The [downloadable ZIP](downloads/ecthr-a-retrieval.zip) contains code, tests, and instructions; it downloads the public dataset on first use. Validation selects k and threshold before test evaluation.

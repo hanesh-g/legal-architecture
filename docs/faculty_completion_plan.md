@@ -43,6 +43,8 @@ The paper uses 8,138 training, 3,000 validation, and 3,000 test cases. The earli
 
 ## Track 2: ECtHR-A for Haneesh3
 
+The standalone runner and exact Windows commands are now provided in [ecthr_a_retrieval/README.md](../ecthr_a_retrieval/README.md). The code-only ZIP is [downloads/ecthr-a-retrieval.zip](../downloads/ecthr-a-retrieval.zip). Its local fixture checks do not establish a measured full ECtHR-A score.
+
 Choose `coastalcph/lex_glue`, configuration `ecthr_a`.
 
 Verified source: https://huggingface.co/datasets/coastalcph/lex_glue

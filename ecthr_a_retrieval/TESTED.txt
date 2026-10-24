@@ -1,0 +1,4 @@
+Software verification: 11 checks passed on Python 3.12 with a small local Qwen3 model and local fixture data.
+Checks cover source label mapping, empty label sets, invalid indices, both padding sides, weighted voting, known metrics, validation-only parameter selection, completed shard reuse, complete pipeline, repeated completed runs, and restart after selection.
+No full public Qwen3-Embedding-0.6B experiment or ECtHR-A benchmark score was measured in this verification.
+CUDA memory behavior must be checked on the target system. Read README.md and run the smoke command before the full run.
